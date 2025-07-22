@@ -126,7 +126,7 @@ Poetryの詳細・トラブルシュートは[Poetry公式ドキュメント](ht
 
 ### 3. 依存パッケージのインストール
 
-このリポジトリのルート（`convert_json` ディレクトリ）で以下を実行してください。
+このリポジトリのルート（`convert_xml_to_json` ディレクトリ）で以下を実行してください。
 
 ```sh
 poetry install
@@ -140,8 +140,8 @@ poetry install
 - MeCab（日本語形態素解析器）はシステムにインストールされている必要があります。
   - macOS: `brew install mecab mecab-ipadic`
   - Ubuntu: `sudo apt install mecab libmecab-dev mecab-ipadic-utf8`
-- fastTextモデル（`cc.ja.300.bin`）は同梱済みです。
-- 入力ファイル・CSVは所定のディレクトリに配置してください。
+- fastTextモデル（`cc.ja.300.bin`）はgitには入れていないため、別途`https://fasttext.cc/docs/en/crawl-vectors.html `からインストールし、bin/配下に配置してください。
+- 入力ファイル(../data/input_files)・CSVは所定のディレクトリに配置してください。
 
 ---
 
@@ -151,13 +151,13 @@ poetry install
 
 ```sh
 # input_files/配下のフォルダ全て実施
-poetry run python convert_xml_to_json.py
+poetry run python scripts/convert_xml_to_json.py
 
 # 1ファイルだけ変換（ファイルパス指定）
-poetry run python convert_xml_to_json.py --file input_files/result_1/0/JP2010000001A/text.txt
+poetry run python scripts/convert_xml_to_json.py --file input_files/result_1/0/JP2010000001A/text.txt
 
 # 先頭5件だけ変換
-poetry run python convert_xml_to_json.py --count 5
+poetry run python scripts/convert_xml_to_json.py --count 5
 ```
 
 - デフォルトではinput_files/ 配下のファイルを全て処理します。
@@ -169,10 +169,12 @@ poetry run python convert_xml_to_json.py --count 5
 
 - CosmosDBにファイルをアップロードする
 
-前提：output_files配下に整形済の特許データjsonファイルが格納されていること
+前提：
+・.envファイルにcosmosDBへのアクセス情報が入っていること
+・output_files配下に整形済の特許データjsonファイルが格納されていること
 
 ```sh
-poetry run python upload_to_cosmos.py
+poetry run python scripts/upload_to_cosmos.py
 ```
 
 
