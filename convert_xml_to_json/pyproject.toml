@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "convert_json"
+version = "0.1.0"
+description = "特許XML→JSON変換＋日本語キーフレーズ抽出ツール"
+authors = ["reina.aratani"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+pke = { git = "https://github.com/boudinfl/pke.git" }
+keybert = "^0.8.5"
+gensim = "^4.3.3"
+mecab-python3 = "^1.0.8"
+scikit-learn = "^1.4.0"
+azure-cosmos = "^4.9.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api" 
