@@ -1,0 +1,4 @@
+.venv/
+output/
+data/
+FTerm_slim.jsonl
