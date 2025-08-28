@@ -18,10 +18,11 @@ from openai import AzureOpenAI
 
 # ===================== 環境設定 =====================
 
+
 # Azure AI Search
 SERVICE_ENDPOINT = ""
 ADMIN_KEY = ""
-INDEX_NAME = "fterm_classification_index"
+INDEX_NAME = "fterm_classification_index_2"
 
 # Azure OpenAI（埋め込み用）
 AZURE_OPENAI_ENDPOINT = ""
@@ -29,24 +30,37 @@ AZURE_OPENAI_KEY = ""
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIMS = 1536
 
-# 入力（統合済みのスリムJSONL：各行 {"chunk_id","code","search_text"}）
-INPUT_JSONL = Path("FTerm_slim.jsonl")
+# 入力（breadcrumbs追加済みのスリムJSONL：各行 {"chunk_id","code","search_text","breadcrumbs"}）
+INPUT_JSONL = Path("output/FTerm_slim_with_breadcrumbs.jsonl")
 
 # バッチサイズ
 BATCH = 64
 
 # ===================== クライアント =====================
 
-index_client = SearchIndexClient(endpoint=SERVICE_ENDPOINT, credential=AzureKeyCredential(ADMIN_KEY))
-search_client = SearchClient(endpoint=SERVICE_ENDPOINT, index_name=INDEX_NAME, credential=AzureKeyCredential(ADMIN_KEY))
-aoai = AzureOpenAI(api_key=AZURE_OPENAI_KEY, api_version="2024-02-01", azure_endpoint=AZURE_OPENAI_ENDPOINT)
+index_client = SearchIndexClient(
+    endpoint=SERVICE_ENDPOINT, 
+    credential=AzureKeyCredential(ADMIN_KEY)
+)
+search_client = SearchClient(
+    endpoint=SERVICE_ENDPOINT, 
+    index_name=INDEX_NAME, 
+    credential=AzureKeyCredential(ADMIN_KEY)
+)
+aoai = AzureOpenAI(
+    api_key=AZURE_OPENAI_KEY, 
+    api_version="2024-02-01", 
+    azure_endpoint=AZURE_OPENAI_ENDPOINT
+)
 
 # ===================== ユーティリティ =====================
+
 
 def sanitize_key(s: str) -> str:
     if not s:
         return ""
     return "".join(ch if (ch.isalnum() or ch in "_-=") else "_" for ch in s)
+
 
 def stream_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
     with path.open("r", encoding="utf-8") as f:
@@ -56,11 +70,14 @@ def stream_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
                 continue
             yield json.loads(line)
 
+
 def embed_texts(texts: List[str]) -> List[List[float]]:
     resp = aoai.embeddings.create(input=texts, model=EMBED_MODEL)
     return [d.embedding for d in resp.data]
 
+
 # ===================== インデックス作成 =====================
+
 
 def ensure_index_exists():
     try:
@@ -70,11 +87,30 @@ def ensure_index_exists():
     except ResourceNotFoundError:
         print(f"[INFO] creating index: {INDEX_NAME}")
 
-    # 最小スキーマ：chunk_id, code, search_text, content_vector
+    # スキーマ：chunk_id, code, search_text, breadcrumbs, content_vector
     fields = [
-        SimpleField(name="chunk_id", type=SearchFieldDataType.String, key=True, filterable=True, sortable=False),
-        SimpleField(name="code", type=SearchFieldDataType.String, filterable=True, sortable=False),
+        SimpleField(
+            name="chunk_id", 
+            type=SearchFieldDataType.String, 
+            key=True, 
+            filterable=True, 
+            sortable=False
+        ),
+        SimpleField(
+            name="code", 
+            type=SearchFieldDataType.String, 
+            filterable=True, 
+            sortable=False
+        ),
         SearchableField(name="search_text", analyzer_name="ja.microsoft"),
+        # breadcrumbsフィールドを追加（検索・フィルタリング用ではないが、取得可能）
+        SimpleField(
+            name="breadcrumbs", 
+            type=SearchFieldDataType.Collection(SearchFieldDataType.String), 
+            filterable=False, 
+            sortable=False, 
+            searchable=False
+        ),
         SearchField(
             name="content_vector",
             type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
@@ -85,7 +121,12 @@ def ensure_index_exists():
 
     vector_search = VectorSearch(
         algorithms=[HnswAlgorithmConfiguration(name="hnsw")],
-        profiles=[VectorSearchProfile(name="vector_profile", algorithm_configuration_name="hnsw")],
+        profiles=[
+            VectorSearchProfile(
+                name="vector_profile", 
+                algorithm_configuration_name="hnsw"
+            )
+        ],
     )
 
     index = SearchIndex(
@@ -97,17 +138,21 @@ def ensure_index_exists():
     index_client.create_index(index)
     print(f"[OK] created index: {INDEX_NAME}")
 
+
 # ===================== アップサート =====================
 
+
 def to_doc(raw: Dict[str, Any]) -> Dict[str, Any]:
-    # 必須3フィールドのみを受け取り、Search用のdocに整形
+    # breadcrumbs追加済みの4フィールドを受け取り、Search用のdocに整形
     chunk_id = raw.get("chunk_id") or sanitize_key(raw.get("code", ""))
     return {
         "chunk_id": chunk_id,
         "code": raw.get("code", ""),
         "search_text": raw.get("search_text", "") or "",
+        "breadcrumbs": raw.get("breadcrumbs", []),  # breadcrumbsフィールドを追加
         # content_vector は後で付与
     }
+
 
 def upload_documents_with_retry(docs: List[Dict[str, Any]], retries: int = 2):
     # クォータ超過はリトライしても通りませんが、短い一時的な429/503向けに軽く実装
@@ -118,7 +163,10 @@ def upload_documents_with_retry(docs: List[Dict[str, Any]], retries: int = 2):
             # 失敗したレコードがないかだけチェック
             failed = [r for r in result if r.succeeded is False]
             if failed:
-                print(f"[WARN] {len(failed)} docs failed (showing first 3 ids): {[r.key for r in failed[:3]]}")
+                print(
+                    f"[WARN] {len(failed)} docs failed "
+                    f"(showing first 3 ids): {[r.key for r in failed[:3]]}"
+                )
             return
         except HttpResponseError as e:
             print(f"[WARN] upload attempt {attempt+1}/{retries+1} failed: {e}")
@@ -126,6 +174,7 @@ def upload_documents_with_retry(docs: List[Dict[str, Any]], retries: int = 2):
                 raise
             time.sleep(delay)
             delay *= 2.0
+
 
 def upsert_with_embeddings(input_path: Path):
     if not input_path.exists():
@@ -159,7 +208,9 @@ def upsert_with_embeddings(input_path: Path):
 
     print(f"[OK] done. total uploaded: {total}")
 
+
 # ===================== エントリポイント =====================
+
 
 if __name__ == "__main__":
     ensure_index_exists()
