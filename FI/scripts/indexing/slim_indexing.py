@@ -21,7 +21,7 @@ from openai import AzureOpenAI
 # Azure AI Search
 SERVICE_ENDPOINT = ""
 ADMIN_KEY = ""
-INDEX_NAME = "fi_classification_index"
+INDEX_NAME = "fi_classification_index_2"
 
 # Azure OpenAI（埋め込み用）
 AZURE_OPENAI_ENDPOINT = ""
@@ -29,8 +29,8 @@ AZURE_OPENAI_KEY = ""
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIMS = 1536
 
-# 入力（統合済みのスリムJSONL：各行 {"chunk_id","code","search_text"}）
-INPUT_JSONL = Path("output/JSONL/FI_slim.jsonl")
+# 入力（breadcrumbs追加済みのスリムJSONL：各行 {"chunk_id","code","search_text","breadcrumbs"}）
+INPUT_JSONL = Path("output/JSONL/FI_slim_with_breadcrumbs.jsonl")
 
 # バッチサイズ
 BATCH = 64
@@ -70,11 +70,14 @@ def ensure_index_exists():
     except ResourceNotFoundError:
         print(f"[INFO] creating index: {INDEX_NAME}")
 
-    # 最小スキーマ：chunk_id, code, search_text, content_vector
+    # スキーマ：chunk_id, code, search_text, breadcrumbs, content_vector
     fields = [
         SimpleField(name="chunk_id", type=SearchFieldDataType.String, key=True, filterable=True, sortable=False),
         SimpleField(name="code", type=SearchFieldDataType.String, filterable=True, sortable=False),
         SearchableField(name="search_text", analyzer_name="ja.microsoft"),
+        # breadcrumbsフィールドを追加（検索・フィルタリング用ではないが、取得可能）
+        SimpleField(name="breadcrumbs", type=SearchFieldDataType.Collection(SearchFieldDataType.String), 
+                   filterable=False, sortable=False, searchable=False),
         SearchField(
             name="content_vector",
             type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
@@ -100,12 +103,13 @@ def ensure_index_exists():
 # ===================== アップサート =====================
 
 def to_doc(raw: Dict[str, Any]) -> Dict[str, Any]:
-    # 必須3フィールドのみを受け取り、Search用のdocに整形
+    # breadcrumbs追加済みの4フィールドを受け取り、Search用のdocに整形
     chunk_id = raw.get("chunk_id") or sanitize_key(raw.get("code", ""))
     return {
         "chunk_id": chunk_id,
         "code": raw.get("code", ""),
         "search_text": raw.get("search_text", "") or "",
+        "breadcrumbs": raw.get("breadcrumbs", []),  # breadcrumbsフィールドを追加
         # content_vector は後で付与
     }
 
