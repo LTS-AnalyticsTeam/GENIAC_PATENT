@@ -2,11 +2,11 @@
 特許データ分類コード推測システム (改良版)
 
 改良点:
-1. FI予測の精度向上: application_fieldとtechnical_fieldの両方でFI予測を行い、より良い結果を採用
-2. キーワードフィルタリング: 遠い類語を除去（遊技機の「アミューズメント」など）
-3. 特許番号の出力: CSVにpatent_idを追加
-4. 安全ブロック対策: Geminiがブロックされた場合にOpenAI APIで再試行
-5. ベクトル検索用に端的な１用語を抽出し、FI予測に使用
+1. FI予測の精度向上: application_fieldとtechnical_fieldの両方でFI予測を行い、タイトルとの関連度で選択
+2. 特許番号の出力: CSVにpatent_idを追加
+3. 安全ブロック対策: Geminiがブロックされた場合にOpenAI APIで再試行
+4. ベクトル検索用に端的な１用語を抽出し、FI予測に使用
+5. 複数手法の共通FIコードを総意として採用
 """
 
 import os
@@ -74,37 +74,10 @@ class PredictionResult:
 class KeywordFilter:
     """キーワードフィルタリングクラス"""
 
-    # 除外すべき遠い類語のマッピング
-    EXCLUDED_TERMS = {
-        'パチンコ': ['アミューズメント', 'エンターテインメント', 'レジャー', '娯楽施設'],
-        'スロット': ['アミューズメント', 'エンターテインメント', 'レジャー', '娯楽施設'],
-        '遊技機': ['アミューズメント', 'エンターテインメント', 'レジャー', '娯楽施設'],
-        'パチスロ': ['アミューズメント', 'エンターテインメント', 'レジャー', '娯楽施設'],
-    }
-
     @classmethod
     def filter_keywords(cls, keywords: List[str], context: str = "") -> List[str]:
-        """文脈に応じて遠い類語を除去"""
-        if not keywords:
-            return keywords
-
-        filtered = []
-        excluded = set()
-
-        # コンテキストから主題を特定
-        context_lower = context.lower()
-        for main_term, exclude_terms in cls.EXCLUDED_TERMS.items():
-            if main_term in context_lower:
-                excluded.update(exclude_terms)
-
-        # フィルタリング
-        for keyword in keywords:
-            if keyword not in excluded:
-                filtered.append(keyword)
-            else:
-                logger.debug(f"キーワード '{keyword}' を除外しました")
-
-        return filtered
+        """キーワードをそのまま返す（フィルタリングなし）"""
+        return keywords if keywords else []
 
 
 class CosmosDBClient:
@@ -262,14 +235,13 @@ class LLMPredictor:
           {focus_instruction}
 
           【分析の視点】
-          - **適用分野**: この発明が使われる場所や目的（例: 自動車、医療、建築、遊技機）。
+          - **適用分野**: この発明が使われる場所や目的（例: 自動車、医療、建築）。
           - **主要な技術分野**: この発明の核心となる技術や構成要素（例: 光学センサー、データ処理、ロボットアーム）。
-          - **適用分野の単一キーワード**: 適用分野を最も的確に表現する1つのキーワード（例: 遊技機特許なら「遊技機」、自動車特許なら「自動車」）。
+          - **適用分野の単一キーワード**: 適用分野を最も的確に表現する1つのキーワード（例: 自動車特許なら「自動車」、医療特許なら「医療」）。
 
           【注意事項】
-          - 汎用的でない特定分野の特許では、直接的な用語を使用してください。
-          - 例: 遊技機関連なら「アミューズメント」ではなく「遊技機」、医療機器なら「ヘルスケア」ではなく「医療機器」。
           - application_keywordは必ず1つの単語またはシンプルな複合語で表現してください。
+          - その特許の適用分野を最も端的に表現する用語を選んでください。
 
           【特許データ】
           発明の名称: {patent_data.title}
@@ -314,7 +286,7 @@ class LLMPredictor:
         return prompt
 
     async def predict_with_openai(self, patent_data: PatentData, focus_on_technical: bool = False) -> PredictionResult:
-        """OpenAI GPT-4で分類コードを推測"""
+        """OpenAI GPT-5で分類コードを推測"""
         start_time = time.time()
         logger.info(f"OpenAI推測開始: {patent_data.patent_id}")
 
@@ -323,19 +295,31 @@ class LLMPredictor:
             prompt = self.create_prompt(patent_data, focus_on_technical)
             logger.debug(f"Prompt作成時間: {time.time() - prompt_start:.2f}秒")
             api_start = time.time()
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",  # gpt-5-miniは存在しないため、gpt-4o-miniに修正
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that analyzes patent documents and predicts classification codes in JSON format."},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.1
+            # response = self.openai_client.chat.completions.create(
+            #     model="gpt-4o-mini",  # gpt-5-miniは存在しないため、gpt-4o-miniに修正
+            #     messages=[
+            #         {"role": "system", "content": "You are a helpful assistant that analyzes patent documents and predicts classification codes in JSON format."},
+            #         {"role": "user", "content": prompt}
+            #     ],
+            #     response_format={"type": "json_object"},
+            #     temperature=0.1
+            # )
+            client = OpenAI()
+            response = client.responses.create(
+                model="gpt-5-mini",
+                input=prompt,
+                reasoning={"effort": "minimal"}
             )
             logger.debug(f"OpenAI API呼び出し時間: {time.time() - api_start:.2f}秒")
 
             parse_start = time.time()
-            result_text = response.choices[0].message.content
+            result_text = ""
+            for out in response.output:
+                if hasattr(out, "content") and out.content:
+                    for c in out.content:
+                        if hasattr(c, "text"):
+                            text = c.text
+                            break
             result_json = json.loads(result_text)
             logger.debug(f"JSONパーシング時間: {time.time() - parse_start:.2f}秒")
 
@@ -507,6 +491,20 @@ class LLMPredictor:
             logger.info("OpenAIで再試行します...")
             return await self.predict_with_openai(patent_data, focus_on_technical)
 
+    def _calculate_keyword_relevance(self, keywords: List[str], title: str) -> float:
+        """キーワードリストとタイトルの関連度を計算"""
+        if not keywords or not title:
+            return 0.0
+
+        title_lower = title.lower()
+        match_count = 0
+
+        for keyword in keywords:
+            if keyword.lower() in title_lower:
+                match_count += 1
+
+        return match_count / len(keywords) if keywords else 0.0
+
     async def predict_with_both_approaches(self, patent_data: PatentData, use_gemini: bool = True) -> PredictionResult:
         """両方のアプローチ（適用分野重視と技術分野重視）でFI予測を行い、より良い結果を返す"""
 
@@ -519,28 +517,26 @@ class LLMPredictor:
             app_result = await self.predict_with_openai(patent_data, focus_on_technical=False)
             tech_result = await self.predict_with_openai(patent_data, focus_on_technical=True)
 
-        # 正解データがある場合は従来の方法
-        if patent_data.correct_fi and len(patent_data.correct_fi) > 0:
-            # より多くのFIコードがマッチする方を選択
-            app_fi_match = self._count_fi_matches(app_result.predicted_fi, patent_data.correct_fi)
-            tech_fi_match = self._count_fi_matches(tech_result.predicted_fi, patent_data.correct_fi)
+        # タイトルとの類似度で判断
+        # application_field_keywordsとtechnical_field_keywordsを使用
+        app_keywords = app_result.analysis.get('application_field_keywords', []) if app_result else []
+        tech_keywords = tech_result.analysis.get('technical_field_keywords', []) if tech_result else []
 
-            logger.debug(f"適用分野重視のFIマッチ数: {app_fi_match}, 技術分野重視のFIマッチ数: {tech_fi_match}")
+        app_relevance = self._calculate_keyword_relevance(app_keywords, patent_data.title)
+        tech_relevance = self._calculate_keyword_relevance(tech_keywords, patent_data.title)
 
-            # より良い結果を選択
-            if tech_fi_match >= app_fi_match:
-                best_result = tech_result
-                best_result.fi_prediction_method = "technical_field_focus"
-            else:
-                best_result = app_result
-                best_result.fi_prediction_method = "application_field_focus"
-        else:
-            # 正解データがない場合は両方の結果を保持して後で判定する
-            # ここでは仮に技術分野重視を返す（後でベクトル検索結果と比較する）
+        logger.debug(f"適用分野キーワードのタイトル関連度: {app_relevance:.2%}, 技術分野キーワードのタイトル関連度: {tech_relevance:.2%}")
+
+        # より関連度の高い方を選択
+        if tech_relevance >= app_relevance:
             best_result = tech_result
             best_result.fi_prediction_method = "technical_field_focus"
-            # 両方の結果を保存しておく
-            best_result._alternative_result = app_result
+        else:
+            best_result = app_result
+            best_result.fi_prediction_method = "application_field_focus"
+
+        # 両方の結果を保存しておく（後で複数手法の共通FI検出で使用）
+        best_result._alternative_result = app_result if tech_relevance >= app_relevance else tech_result
 
         return best_result
 
@@ -632,7 +628,7 @@ def find_common_fi_codes(all_predictions: Dict[str, List[str]], min_methods: int
     """複数の予測手法から共通するFIコードを見つける"""
     if len(all_predictions) < min_methods:
         return []
-    
+
     # 各手法のFIコードを正規化
     normalized_predictions = {}
     for method, codes in all_predictions.items():
@@ -640,18 +636,18 @@ def find_common_fi_codes(all_predictions: Dict[str, List[str]], min_methods: int
             re.sub(r'[^A-Z0-9]', '', str(code).split('/')[0].upper())
             for code in codes
         ]
-    
+
     # 共通するコードを見つける
     common_codes = []
     all_codes = set()
     for codes in normalized_predictions.values():
         all_codes.update(codes)
-    
+
     for code in all_codes:
         count = sum(1 for method_codes in normalized_predictions.values() if code in method_codes)
         if count >= min_methods:
             common_codes.append(code)
-    
+
     return common_codes
 
 
@@ -811,52 +807,66 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
             except Exception as e:
                 logger.warning(f"単一適用分野キーワードのベクトル検索に失敗: {e}")
 
-    # 正解データがない場合、複数手法の共通FIコードを探す
-    if not patent_data.correct_fi or len(patent_data.correct_fi) == 0:
-        # すべての予測結果を収集
-        all_fi_predictions = {}
-        
-        # Gemini結果（両方のアプローチ）
-        if gemini_result:
-            all_fi_predictions['Gemini_technical'] = gemini_result.predicted_fi
-            if hasattr(gemini_result, '_alternative_result') and gemini_result._alternative_result:
-                all_fi_predictions['Gemini_application'] = gemini_result._alternative_result.predicted_fi
-        
-        # ベクトル検索結果を収集
-        if 'fi_codes_app' in locals() and fi_codes_app:
-            all_fi_predictions['Vector_Application'] = fi_codes_app
-        if 'fi_codes_tech' in locals() and fi_codes_tech:
-            all_fi_predictions['Vector_Technical'] = fi_codes_tech
-        if 'fi_codes_single' in locals() and fi_codes_single:
-            all_fi_predictions['Vector_Single'] = fi_codes_single
-            
-        # 共通するFIコードを見つける
-        common_fi_codes = find_common_fi_codes(all_fi_predictions, min_methods=2)
-        
-        if common_fi_codes:
-            logger.info(f"共通FIコード発見: {common_fi_codes}")
-            
-            # 共通FIコードを使った結果を追加
-            patent_results.append({
-                'patent_id': patent_data.patent_id,
-                'patent_title': patent_data.title,
-                'model': 'Consensus_Method',
-                'fi_prediction_method': 'multiple_methods_consensus',
-                'predicted_theme_code': '',
-                'correct_theme_code': '; '.join(patent_data.correct_theme_code),
-                'predicted_fi': '; '.join(common_fi_codes),
-                'correct_fi': '; '.join(patent_data.correct_fi),
-                'predicted_fterm': '',
-                'correct_fterm': '; '.join(patent_data.correct_fterm),
-                'theme_accuracy': '0/0 (0.00%)',
-                'fi_accuracy': '0/0 (0.00%)',  # 正解データがないので精度計算不可
-                'fterm_accuracy': '0/0 (0.00%)',
-                'application_field_keywords': '',
-                'technical_field_keywords': '',
-                'application_keyword': '',
-            })
-        else:
-            logger.warning(f"共通FIコードが見つかりませんでした。各手法の予測: {list(all_fi_predictions.keys())}")
+    # 複数手法の共通FIコードを探す（常に実行）
+    # すべての予測結果を収集
+    all_fi_predictions = {}
+
+    # Gemini結果（選択されたアプローチ + 代替アプローチ）
+    if gemini_result:
+        # タイトルとの類似度で選ばれた方
+        method_name = 'Gemini_' + ('technical' if gemini_result.fi_prediction_method == 'technical_field_focus' else 'application')
+        all_fi_predictions[method_name] = gemini_result.predicted_fi
+
+        # もう一方のアプローチも含める
+        if hasattr(gemini_result, '_alternative_result') and gemini_result._alternative_result:
+            alt_method_name = 'Gemini_' + ('application' if method_name.endswith('technical') else 'technical')
+            all_fi_predictions[alt_method_name] = gemini_result._alternative_result.predicted_fi
+
+    # ベクトル検索結果を収集
+    if 'fi_codes_app' in locals() and fi_codes_app:
+        all_fi_predictions['Vector_Application'] = fi_codes_app
+    if 'fi_codes_tech' in locals() and fi_codes_tech:
+        all_fi_predictions['Vector_Technical'] = fi_codes_tech
+    if 'fi_codes_single' in locals() and fi_codes_single:
+        all_fi_predictions['Vector_Single'] = fi_codes_single
+
+    # 共通するFIコードを見つける
+    common_fi_codes = find_common_fi_codes(all_fi_predictions, min_methods=2)
+
+    if common_fi_codes:
+        logger.info(f"共通FIコード発見: {common_fi_codes}")
+
+        # 精度計算（正解データがある場合のみ）
+        fi_hits_consensus = 0
+        fi_total_consensus = 0
+        fi_acc_consensus = 0.0
+
+        if patent_data.correct_fi and len(patent_data.correct_fi) > 0:
+            fi_hits_consensus, fi_total_consensus, fi_acc_consensus = calculator.calculate_accuracy(
+                common_fi_codes, patent_data.correct_fi, code_type='fi'
+            )
+
+        # 共通FIコードを使った結果を追加（総意として1行で表現）
+        patent_results.append({
+            'patent_id': patent_data.patent_id,
+            'patent_title': patent_data.title,
+            'model': 'Consensus_Method',
+            'fi_prediction_method': f'consensus_{len([m for m in all_fi_predictions.values() if any(code in [re.sub(r"[^A-Z0-9]", "", str(c).split("/")[0].upper()) for c in m] for code in common_fi_codes)])}methods',
+            'predicted_theme_code': '',
+            'correct_theme_code': '; '.join(patent_data.correct_theme_code),
+            'predicted_fi': '; '.join(common_fi_codes),
+            'correct_fi': '; '.join(patent_data.correct_fi),
+            'predicted_fterm': '',
+            'correct_fterm': '; '.join(patent_data.correct_fterm),
+            'theme_accuracy': '0/0 (0.00%)',
+            'fi_accuracy': f"{fi_hits_consensus}/{fi_total_consensus} ({fi_acc_consensus:.2%})" if fi_total_consensus > 0 else '0/0 (0.00%)',
+            'fterm_accuracy': '0/0 (0.00%)',
+            'application_field_keywords': f"Methods: {', '.join(all_fi_predictions.keys())}",
+            'technical_field_keywords': f"Common FI: {', '.join(common_fi_codes)}",
+            'application_keyword': f"{len(all_fi_predictions)}手法中{len([m for m in all_fi_predictions.values() if any(code in [re.sub(r'[^A-Z0-9]', '', str(c).split('/')[0].upper()) for c in m] for code in common_fi_codes)])}手法で一致",
+        })
+    else:
+        logger.warning(f"共通FIコードが見つかりませんでした。各手法の予測: {list(all_fi_predictions.keys())}")
 
     return patent_results
 
@@ -874,7 +884,7 @@ async def main():
 
     # データ取得
     logger.info("CosmosDBから特許データを取得中...")
-    patent_data_list = cosmos_client.get_patent_data(limit=10)  # テスト時は件数を絞る
+    patent_data_list = cosmos_client.get_patent_data(limit=50)  # テスト時は件数を絞る
 
     if not patent_data_list:
         logger.error("特許データが取得できませんでした。CosmosDBの接続とデータ構造を確認してください。")
