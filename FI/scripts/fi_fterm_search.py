@@ -9,6 +9,7 @@ import argparse
 import os
 import subprocess
 import sys
+from collections import defaultdict
 from typing import Any, Dict, List
 
 from azure.core.credentials import AzureKeyCredential
@@ -44,7 +45,7 @@ def search_top3(index_name: str, query_text: str, vec: List[float]) -> List[Dict
         search_fields=["search_text"],
         vector_queries=[vq],
         select=["chunk_id", "code", "search_text", "breadcrumbs"],  # 追加
-        top=1,
+        top=3,
     )
 
     rows: List[Dict[str, Any]] = []
@@ -75,9 +76,6 @@ def _project_code(row: Dict[str, Any], r: float) -> str:
     # パンくずのその層をコードとして採用
     return str(bc[target_depth]) if bc[target_depth] else (str(code) if code else "")
 
-# 3) 支持数で集約（FI / F-term 別）
-from collections import defaultdict
-
 
 def _aggregate_by_projection(rows: List[Dict[str, Any]], r: float):
     counts = defaultdict(int)
@@ -92,12 +90,15 @@ def _aggregate_by_projection(rows: List[Dict[str, Any]], r: float):
     ranked = sorted(counts.keys(), key=lambda k: (counts[k], score_sum[k]), reverse=True)
     return ranked, counts, score_sum
 
+
 def _format_fi_code(code: str) -> str:
     # FIコードの末尾表記はそのまま活かし、フィールド指定だけ付与
     return f"{code}/FI"
 
+
 def _format_fterm_code(code: str) -> str:
     return f"{code}/FT"
+
 
 def _build_jplatpat_from_results(fi_codes: List[str], ft_codes: List[str], tx_terms: List[str]) -> str:
     # (FI/FI * F/F) を + で繋いで [] に入れる
@@ -112,6 +113,7 @@ def _build_jplatpat_from_results(fi_codes: List[str], ft_codes: List[str], tx_te
 
     # 全体連結（空要素は除外）
     return " * ".join([p for p in [head, tx_part] if p])
+
 
 def main():
     parser = argparse.ArgumentParser(description="FI / F-term ハイブリッド検索（各3件）")

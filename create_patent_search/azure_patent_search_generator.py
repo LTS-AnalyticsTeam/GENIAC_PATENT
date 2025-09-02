@@ -1,7 +1,8 @@
 import argparse
 import json
 import os
-from typing import List, Set
+from collections import defaultdict
+from typing import Any, Dict, List, Set
 
 from openai import AzureOpenAI
 
@@ -188,6 +189,20 @@ def convert_to_jplatpat(original_expression: str) -> str:
     if right_groups:
         parts_out.append(block_expr(right_groups))
     return "* ".join(parts_out)
+
+
+def _aggregate_leaf_code(rows: List[Dict[str, Any]]):
+    counts = defaultdict(int)
+    score_sum = defaultdict(float)
+    for row in rows:
+        code = row.get("code")
+        if not code:
+            continue
+        code = str(code)
+        counts[code] += 1
+        score_sum[code] += float(row.get("score", 0.0))
+    ranked = sorted(counts.keys(), key=lambda k: (counts[k], score_sum[k]), reverse=True)
+    return ranked, counts, score_sum
 
 
 def main():
