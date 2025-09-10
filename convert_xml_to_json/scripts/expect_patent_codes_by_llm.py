@@ -164,254 +164,10 @@ class PredictionResult:
     analysis: Dict[str, any]
     theme_keywords: List[str]
     fi_keywords: List[str]
-    fterm_keywords: List[str]
     model_name: str
     fi_prediction_method: str = ""  # どちらのキーワードを使用したか記録
 
 
-class KeywordFilter:
-    """キーワードフィルタリングクラス"""
-
-    # 汎用技術語彙辞書
-    TECHNICAL_VOCABULARY = {
-        # 材料・構造関連
-        '材料': ['金属', 'プラスチック', '樹脂', '繊維', '複合材料', '合金', 'セラミック'],
-        '構造': ['フレーム', '筐体', 'ケース', '支持体', '基板', '接続部', '結合部'],
-        '機械要素': ['軸', 'ベアリング', 'ギア', 'スプリング', 'ボルト', 'ナット', 'シール'],
-
-        # 処理・方法関連
-        '加工': ['切削', '研削', '穿孔', '成形', '鋳造', '鍛造', '溶接'],
-        '制御': ['制御', '調整', '監視', '検出', '測定', '計測', 'フィードバック'],
-        '処理': ['データ処理', '信号処理', '画像処理', '音声処理', '圧縮', '変換'],
-
-        # 機能・効果関連
-        '性能向上': ['効率化', '高速化', '精度向上', '安定化', '最適化', '省エネ'],
-        '品質改善': ['ノイズ低減', '振動抑制', '耐久性向上', '信頼性向上', '強度向上'],
-
-        # 用途・分野関連
-        '産業分野': ['自動車', '航空宇宙', '建築', '電子', '医療', '通信', '製造業'],
-        '応用分野': ['センサー', 'アクチュエータ', 'ディスプレイ', 'エンジン', 'モータ'],
-    }
-
-    @classmethod
-    def generalize_keywords(cls, keywords: List[str]) -> List[str]:
-        """個別最適なキーワードを汎用的なキーワードに置換"""
-        generalized = []
-
-        for keyword in keywords:
-            # 汎用語彙辞書から最適なマッチを探す
-            best_match = cls._find_best_general_term(keyword)
-            if best_match:
-                generalized.append(best_match)
-            else:
-                # マッチしない場合は上位概念を推定
-                general_term = cls._extract_general_concept(keyword)
-                if general_term:
-                    generalized.append(general_term)
-
-        # 重複を除去して返す
-        return list(dict.fromkeys(generalized))  # 順序を保持しつつ重複除去
-
-    @classmethod
-    def _find_best_general_term(cls, keyword: str) -> str:
-        """キーワードに最も適合する汎用語彙を見つける"""
-        # 各カテゴリの語彙と照合
-        for category, terms in cls.TECHNICAL_VOCABULARY.items():
-            for term in terms:
-                if term in keyword or keyword in term:
-                    return category  # カテゴリ名を返す
-
-        # 部分的なマッチングも試行
-        for category, terms in cls.TECHNICAL_VOCABULARY.items():
-            for term in terms:
-                # 3文字以上の共通部分があればマッチとみなす
-                if len(term) >= 3 and (term[:3] in keyword or keyword[:3] in term):
-                    return category
-
-        return None
-
-    @classmethod
-    def _extract_general_concept(cls, keyword: str) -> str:
-        """キーワードから一般概念を抽出"""
-        # よくある技術用語のパターンマッチング
-        patterns = {
-            'システム': '制御システム',
-            '装置': '機械装置',
-            '方法': '処理方法',
-            '構造': '機械構造',
-            '部品': '機械要素',
-            'センサー': 'センサー',
-            '制御': '制御システム',
-            '検出': '検出システム',
-            '処理': 'データ処理',
-            '接続': '接続構造',
-            '固定': '固定機構',
-        }
-
-        for pattern, general_term in patterns.items():
-            if pattern in keyword:
-                return general_term
-
-        # デフォルトでより一般的な用語を返す
-        if len(keyword) > 5:  # 長いキーワードは「技術要素」に分類
-            return '技術要素'
-
-        return None
-
-    @classmethod
-    def calculate_specificity_score(cls, keyword: str) -> float:
-        """キーワードの具体性スコアを計算（0.0-1.0、高いほど具体的）"""
-        if not keyword or len(keyword) < 2:
-            return 0.0
-
-        score = 0.0
-
-        # 1. 語長による評価（長いほど具体的な傾向）
-        length_score = min(len(keyword) / 10.0, 0.3)  # 最大0.3
-        score += length_score
-
-        # 2. カタカナ比率（技術用語の特徴）
-        katakana_ratio = cls._count_katakana(keyword) / len(keyword)
-        if katakana_ratio > 0.5:  # カタカナが半分以上
-            score += 0.2
-
-        # 3. 英数字を含む（仕様・規格の特徴）
-        if any(c.isdigit() for c in keyword):  # 数字を含む
-            score += 0.2
-        if any(c.isalpha() for c in keyword):  # 英字を含む
-            score += 0.1
-
-        # 4. 複合語の特徴（具体的な機能や構造を表す）
-        compound_indicators = ['ー', '・', '_', '-']
-        if any(indicator in keyword for indicator in compound_indicators):
-            score += 0.1
-
-        # 5. 語尾による判定（抽象度の高い語尾をペナルティ）
-        abstract_suffixes = ['性', '化', '的', '用', '系', '式', '法', '業']
-        if any(keyword.endswith(suffix) for suffix in abstract_suffixes):
-            score -= 0.2
-
-        return max(0.0, min(1.0, score))  # 0.0-1.0に正規化
-
-    @classmethod
-    def filter_keywords(cls, keywords: List[str], _context: str = "") -> List[str]:
-        """具体性スコアに基づいてキーワードをフィルタリング"""
-        if not keywords:
-            return []
-
-        # 各キーワードに具体性スコアを付与
-        scored_keywords = []
-        for keyword in keywords:
-            keyword = keyword.strip()
-            if keyword:
-                score = cls.calculate_specificity_score(keyword)
-                scored_keywords.append((keyword, score))
-
-        # スコアでソート（高い順）
-        scored_keywords.sort(key=lambda x: x[1], reverse=True)
-
-        # 閾値以上のキーワードのみを選択（動的閾値）
-        if not scored_keywords:
-            return []
-
-        # 上位スコアの50%以上を閾値とする（相対的評価）
-        max_score = scored_keywords[0][1]
-        threshold = max_score * 0.5 if max_score > 0 else 0.3
-
-        filtered = [kw for kw, score in scored_keywords if score >= threshold]
-
-        return filtered[:10]  # 最大10個に制限
-
-    @classmethod
-    def _count_katakana(cls, text: str) -> int:
-        """カタカナ文字数をカウント"""
-        return sum(1 for c in text if '\u30A0' <= c <= '\u30FF')
-
-    @classmethod
-    def calculate_title_similarity_score(cls, keyword: str, title: str) -> float:
-        """タイトルとキーワードの意味的類似度スコアを計算"""
-        if not keyword or not title:
-            return 0.0
-
-        keyword_lower = keyword.lower()
-        title_lower = title.lower()
-
-        # 1. 完全一致
-        if keyword_lower in title_lower:
-            return 1.0
-
-        # 2. 部分一致（キーワードの一部がタイトルに含まれる）
-        keyword_chars = set(keyword_lower)
-        title_chars = set(title_lower)
-        char_overlap = len(keyword_chars & title_chars) / len(keyword_chars) if keyword_chars else 0
-
-        # 3. 語の境界を考慮した類似度
-        keyword_parts = [part for part in keyword_lower if len(part) > 1]
-        title_parts = title_lower
-
-        partial_matches = 0
-        for part in keyword_parts:
-            if len(part) > 1 and part in title_parts:
-                partial_matches += 1
-
-        partial_score = partial_matches / len(keyword_parts) if keyword_parts else 0
-
-        # 最終スコア（重み付け平均）
-        similarity_score = (char_overlap * 0.3 + partial_score * 0.7)
-
-        return min(1.0, similarity_score)
-
-    @classmethod
-    def merge_and_prioritize_keywords(cls, app_keywords: List[str], tech_keywords: List[str], title: str = "") -> List[str]:
-        """タイトル類似度と具体性を考慮してキーワードをマージ・優先順位付け"""
-        # 全キーワードを収集して総合スコア付け
-        all_keywords = []
-
-        for keyword in tech_keywords:
-            if keyword.strip():
-                kw = keyword.strip()
-                specificity_score = cls.calculate_specificity_score(kw)
-                title_similarity = cls.calculate_title_similarity_score(kw, title) if title else 0
-
-                # technical_keywordsは具体性を重視（重み: 具体性70%, タイトル類似度30%）
-                total_score = specificity_score * 0.7 + title_similarity * 0.3
-                all_keywords.append((kw, total_score, 'tech', specificity_score, title_similarity))
-
-        for keyword in app_keywords:
-            keyword = keyword.strip()
-            if keyword and keyword not in [kw for kw, _, _, _, _ in all_keywords]:
-                specificity_score = cls.calculate_specificity_score(keyword)
-                title_similarity = cls.calculate_title_similarity_score(keyword, title) if title else 0
-
-                # application_keywordsはタイトル類似度を重視（重み: タイトル類似度60%, 具体性40%）
-                total_score = title_similarity * 0.6 + specificity_score * 0.4
-                all_keywords.append((keyword, total_score, 'app', specificity_score, title_similarity))
-
-        # 総合スコアでソート（高い順）
-        all_keywords.sort(key=lambda x: x[1], reverse=True)
-
-        # 上位8個を選択、できればtech/appのバランスを考慮
-        selected = []
-        tech_count = 0
-        app_count = 0
-
-        for kw, _score, source, _spec_score, _title_score in all_keywords[:12]:  # 少し多めに候補を確保
-            if len(selected) >= 8:
-                break
-
-            # バランス調整：techが6個超えたらappを優先、appが6個超えたらtechを優先
-            if source == 'tech' and tech_count >= 6:
-                continue
-            if source == 'app' and app_count >= 6:
-                continue
-
-            selected.append(kw)
-            if source == 'tech':
-                tech_count += 1
-            else:
-                app_count += 1
-
-        return selected
 
 
 class CosmosDBClient:
@@ -682,7 +438,6 @@ class LLMPredictor:
         genai.configure(api_key=os.environ['GOOGLE_API_KEY'])
         self.gemini_model_25 = genai.GenerativeModel('gemini-2.5-flash')
         self.gemini_model_20 = genai.GenerativeModel('gemini-2.0-flash-exp')  # フォールバック用
-        self.keyword_filter = KeywordFilter()
 
     def create_unified_prompt(self, patent_data: PatentData) -> str:
         """
@@ -807,7 +562,6 @@ class LLMPredictor:
               }},
               "theme_keywords": ["テーマコード推測の根拠となったキーワード"],
               "fi_keywords": ["FI分類推測の根拠となったキーワード"],
-              "fterm_keywords": ["Fターム推測の根拠となったキーワード"]
           }}
 
           【出力例】
@@ -828,7 +582,6 @@ class LLMPredictor:
               }},
               "theme_keywords": ["コンピュータ", "入出力"],
               "fi_keywords": ["タッチパネル", "入力装置"],
-              "fterm_keywords": ["ノイズ対策", "電極構造"]
           }}
           """
         return prompt
@@ -886,7 +639,6 @@ class LLMPredictor:
                 analysis=result_json.get('analysis', {}),
                 theme_keywords=result_json.get('theme_keywords', []),
                 fi_keywords=result_json.get('fi_keywords', []),
-                fterm_keywords=result_json.get('fterm_keywords', []),
                 model_name="OpenAI_GPT-4o-mini",
                 fi_prediction_method="technical" if focus_on_technical else "application"
             )
@@ -962,7 +714,6 @@ class LLMPredictor:
                 analysis=result_json.get('analysis', {}),
                 theme_keywords=result_json.get('theme_keywords', []),
                 fi_keywords=result_json.get('fi_keywords', []),
-                fterm_keywords=result_json.get('fterm_keywords', []),
                 model_name="Gemini_2.5_Flash",
                 fi_prediction_method="technical" if focus_on_technical else "application"
             )
@@ -1025,7 +776,6 @@ class LLMPredictor:
                 analysis=result_json.get('analysis', {}),
                 theme_keywords=result_json.get('theme_keywords', []),
                 fi_keywords=result_json.get('fi_keywords', []),
-                fterm_keywords=result_json.get('fterm_keywords', []),
                 model_name="Gemini_2.0_Flash_Fallback",  # フォールバックであることを明示
                 fi_prediction_method="technical" if focus_on_technical else "application"
             )
@@ -1170,7 +920,6 @@ class LLMPredictor:
                 },
                 theme_keywords=[],
                 fi_keywords=[],
-                fterm_keywords=[],
                 model_name="gemini-2.5-flash-unified",
                 fi_prediction_method=method
             )
@@ -1189,7 +938,6 @@ class LLMPredictor:
                     },
                     theme_keywords=[],
                     fi_keywords=[],
-                    fterm_keywords=[],
                     model_name="gemini-2.5-flash-unified-alt"
                 )
                 result._alternative_result = alt_result
@@ -1207,7 +955,6 @@ class LLMPredictor:
                 analysis={"error": "JSON解析エラー"},
                 theme_keywords=[],
                 fi_keywords=[],
-                fterm_keywords=[],
                 model_name="gemini-unified-fallback",
                 fi_prediction_method="application_field_focus"
             )
@@ -1255,106 +1002,6 @@ class LLMPredictor:
         main_part = code_parts[0] if code_parts else code
         return re.sub(r'[^A-Z0-9]', '', main_part.upper())
 
-    async def extract_hierarchical_fterm_keywords(self, patent_data: PatentData, theme_codes: List[str]) -> List[str]:
-        """階層的アプローチ：テーマコードを考慮したFターム専用キーワードを抽出"""
-        start_time = time.time()
-        logger.info(f"階層的Fターム用キーワード抽出開始: {patent_data.patent_id}")
-
-        all_claims = "\n\n".join(patent_data.claims_main) if patent_data.claims_main else "請求項情報なし"
-        theme_context = f"想定テーマコード: {', '.join(theme_codes)}" if theme_codes else "テーマコード情報なし"
-
-        prompt = f"""
-        以下の特許データから、Fターム分類に有効な汎用的技術キーワードを抽出してください。
-
-        【特許データ】
-        発明の名称: {patent_data.title}
-        要約: {patent_data.abstract}
-        請求項: {all_claims}
-        {theme_context}
-
-        【Fターム抽出の重要な観点】
-        1. 汎用的な技術分野・技術要素（材料分野、構造分野、機能分野など）
-        2. 一般的な解決手段・処理方法（接続、固定、制御、検出など）
-        3. 基本的な技術効果・性能向上（強度向上、精度向上、効率化など）
-        4. 広い用途分野（建築、機械、電子、医療など）
-
-        【回答形式】
-        技術分野: [汎用的な技術分野用語, 最大3個]
-        処理方法: [一般的な処理・操作方法, 最大3個]
-        用途分野: [広い応用分野, 最大2個]
-
-        【抽出の方針】
-        - 特定製品名や固有名詞は使用せず、一般的な技術用語を使用
-        - 「適合」「専用」等の限定的表現は避け、上位概念を使用
-        - 技術分野で広く使われる標準的な用語を優先
-        - 複数の特許に適用できる汎用性のある用語を選択
-        - 個別最適ではなく、分類体系で使われる一般用語を重視
-
-        【良い例】
-        技術分野: 機械要素, 接続構造, センサー
-        処理方法: 固定処理, 制御方法, 検出処理
-        用途分野: 建築分野, 機械分野
-
-        【悪い例（避けるべき）】
-        技術分野: 穿孔口径適合システム, ホース専用取付具
-        処理方法: 穿孔口径・穿孔長さ適合化, ホース先端部固定方式
-        """
-
-        try:
-            safety_settings = [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-            ]
-
-            response = self.gemini_model_25.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0,
-                ),
-                safety_settings=safety_settings
-            )
-
-            if response.candidates and response.candidates[0].content.parts:
-                result_text = response.candidates[0].content.parts[0].text.strip()
-
-                # 階層的キーワード抽出（新しい形式に対応）
-                keywords = []
-                lines = result_text.split('\n')
-                for line in lines:
-                    if any(category in line for category in ['技術分野:', '処理方法:', '用途分野:']):
-                        keyword_part = line.split(':')[1].strip() if ':' in line else line
-                        line_keywords = [kw.strip() for kw in keyword_part.split(',') if kw.strip()]
-                        keywords.extend(line_keywords)
-
-                # キーワードを汎用化（個別最適を防ぐ）
-                keywords = KeywordFilter.generalize_keywords(keywords)
-
-                # 最大8個に制限（各カテゴリから均等に）
-                keywords = keywords[:8]
-
-                total_time = time.time() - start_time
-                logger.info(f"階層的Fターム用キーワード抽出完了: {patent_data.patent_id}, 時間: {total_time:.2f}秒")
-                logger.debug(f"抽出されたキーワード: {keywords}")
-                return keywords
-            else:
-                logger.warning(f"階層的Fターム用キーワード抽出に失敗: {patent_data.patent_id}")
-                return []
-        except Exception as e:
-            total_time = time.time() - start_time
-            logger.error(f"階層的Fターム用キーワード抽出エラー: {e}, 時間: {total_time:.2f}秒")
-            return []
-
-    async def extract_fterm_keywords(self, patent_data: PatentData) -> List[str]:
-        """従来のFターム推測用キーワード抽出（互換性のため残す）"""
-        # まず簡単にテーマコードを推定
-        predicted_themes = []
-        if hasattr(patent_data, 'correct_theme_code'):
-            # テーマコードを使って階層的抽出を試行
-            return await self.extract_hierarchical_fterm_keywords(patent_data, predicted_themes)
-        else:
-            return await self.extract_hierarchical_fterm_keywords(patent_data, [])
 
     # extract_patent_core_concept_llm メソッドは削除
     # メインプロンプトに統合されたため不要
@@ -1915,10 +1562,8 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
     # 1. FI予測（既存機能）
     # 2. Fターム用キーワード抽出（新機能）
     gemini_task = predictor.predict_with_both_approaches(patent_data, use_gemini=True)
-    fterm_keywords_task = predictor.extract_fterm_keywords(patent_data)
-
     # 並行実行して結果を取得
-    gemini_result, fterm_keywords = await asyncio.gather(gemini_task, fterm_keywords_task)
+    gemini_result = await gemini_task
 
     patent_results = []
     # OpenAIの結果はコメントアウト
@@ -2351,7 +1996,6 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
         
         # フォールバック: 従来の実用的アプローチ
         vector_theme_results = []
-        vector_fterm_results = []
         
         # テーマコードベースの検索結果から抽出
         for result in patent_results:

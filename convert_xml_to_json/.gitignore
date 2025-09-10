@@ -17,4 +17,9 @@ venv/
 Thumbs.db
 
 # その他
-*.log 
+*.log
+
+.env
+
+*/convert_xml_to_json/data/outputs/*
+*/convert_xml_to_json/data/output_keywords/*
