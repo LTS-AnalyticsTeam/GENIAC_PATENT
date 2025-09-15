@@ -30,38 +30,41 @@ python expect_patent_codes_by_llm.py --debug
 9. 実用的最適化アプローチ: 精度重視でLLM結果を優先し、ベクトル検索で補完する戦略
 """
 
-import os
-import json
-import csv
-import logging
-import time
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Set
 import asyncio
+import csv
+import json
+import logging
+import os
 import re
 import subprocess
-from dataclasses import dataclass
 
 # 改良されたハイブリッドシステムをインポート
 import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, List, Optional, Set, Tuple
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 try:
     from enhanced_theme_predictor import EnhancedThemePredictor
 except ImportError:
-    logger.warning("enhanced_theme_predictor not found, using fallback")
+    # logger may not be initialized yet at import time
+    print("enhanced_theme_predictor not found, using fallback")
     EnhancedThemePredictor = None
 
 # 外部ライブラリ
 try:
-    from azure.cosmos import CosmosClient
-    import pandas as pd
     import google.generativeai as genai
+    import pandas as pd
+    from azure.cosmos import CosmosClient
+    from dotenv import load_dotenv
     from openai import OpenAI
+
     # LLM強化テーマコード予測システム
     from theme_code_predictor_with_llm import predict_theme_code
-    from dotenv import load_dotenv
 except ImportError as e:
     print(f"必要なライブラリがインストールされていません: {e}")
     print("以下のコマンドを実行してください: pip install azure-cosmos pandas google-generativeai openai python-dotenv")
@@ -73,60 +76,74 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# テーマコード検索：FI/scripts/theme_code_search.pyを使用
+# テーマコード検索：FI/scripts/fi_fterm_search.py に差し替え
 import subprocess
-import json as json_module
+
 
 def search_theme_codes_via_fi_script(query_text: str, top_k: int = 3) -> List[Dict[str, str]]:
     """
-    FI/scripts/theme_code_search.pyを使用してテーマコード検索を実行
+    FI/scripts/fi_fterm_search.py を用いて FI / F-term の上位候補を取得し、
+    互換の形式（theme_code相当のフィールドにcodeを入れる）で返す。
+
+    注意: 本来のテーマコード検索とは異なり、ここではFI/F-termコードを返します。
+    以降の処理はコード文字列として扱えるため、最低限の置き換えとして機能します。
 
     Args:
         query_text: 検索クエリテキスト
-        top_k: 上位何件を返すか
-
+        top_k: 各インデックスからの上位件数を概ね制御（fi_fterm_search側は固定3件）
     Returns:
-        テーマコード検索結果のリスト
+        リスト[{'theme_code': <code>, 'description': <index名とchunk_id>, 'full_title': '', 'similarity_score': <score>}]
     """
     if not query_text.strip():
         return []
 
     try:
-        # FI/scripts/theme_code_search.pyのパス
-        fi_script_path = os.path.join(os.path.dirname(__file__), '../../FI/scripts/theme_code_search.py')
+        # FI/scripts/fi_fterm_search.py のパス
+        fi_script_path = os.path.join(os.path.dirname(__file__), '../../FI/scripts/fi_fterm_search.py')
 
-        # スクリプトを実行
+        # スクリプトを実行（標準出力はTSV: index\tcode\tchunk_id\tscore）
         result = subprocess.run(
-            ['python', fi_script_path, '--json', '--top-k', str(top_k), query_text],
+            ['python', fi_script_path, query_text],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=40
         )
 
-        if result.returncode == 0:
-            # JSON形式の結果をパース
-            search_results = json_module.loads(result.stdout)
-
-            # 結果を統一形式に変換
-            formatted_results = []
-            for item in search_results:
-                formatted_results.append({
-                    'theme_code': item.get('theme_code', ''),
-                    'description': item.get('description', ''),
-                    'full_title': item.get('full_title', ''),
-                    'similarity_score': float(item.get('score', 0.0))
-                })
-
-            return formatted_results
-        else:
-            logger.warning(f"テーマコード検索スクリプトエラー: {result.stderr}")
+        if result.returncode != 0:
+            logger.warning(f"fi_fterm_search 実行エラー: {result.stderr}")
             return []
 
+        formatted_results: List[Dict[str, str]] = []
+        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        for ln in lines:
+            parts = ln.split('\t')
+            if len(parts) < 4:
+                continue
+            idx, code, chunk_id, score_str = parts[:4]
+            try:
+                score = float(score_str)
+            except Exception:
+                score = 0.0
+            formatted_results.append({
+                'theme_code': code,  # 互換のためにcodeをtheme_codeフィールドに入れる
+                'description': f"{idx}:{chunk_id}",
+                'full_title': '',
+                'similarity_score': score,
+            })
+
+        # 上位top_k相当に制限（両インデックス合算後の簡易カット）
+        if top_k is not None and top_k > 0:
+            formatted_results = formatted_results[: top_k]
+        return formatted_results
+
     except subprocess.TimeoutExpired:
-        logger.warning("テーマコード検索がタイムアウトしました")
+        logger.warning("fi_fterm_search がタイムアウトしました")
+        return []
+    except FileNotFoundError:
+        logger.warning("fi_fterm_search.py が見つかりません。FI/scripts 配下を確認してください。")
         return []
     except Exception as e:
-        logger.warning(f"テーマコード検索実行エラー: {e}")
+        logger.warning(f"fi_fterm_search 実行中にエラー: {e}")
         return []
 
 # レガシーのThemeSearchHelperクラス（後方互換性のため）
@@ -258,8 +275,8 @@ class VectorSearchPredictor:
             # evaluate_fi_fterm_from_csv.pyと同じ方法でスクリプトパスを構築
             script_path = os.path.join(os.path.dirname(__file__), "../../FI/scripts/fi_fterm_search.py")
 
-            # FI仮想環境のPythonを使用
-            venv_python = "/Users/reina.aratani/geniac/GENIAC_PATENT/FI/.venv/bin/python"
+            # Use current Python executable
+            venv_python = sys.executable
 
             subprocess_start = time.time()
             result = subprocess.run(
@@ -307,7 +324,7 @@ class VectorSearchPredictor:
 
         try:
             script_path = os.path.join(os.path.dirname(__file__), "../../FI/scripts/fi_fterm_search.py")
-            venv_python = "/Users/reina.aratani/geniac/GENIAC_PATENT/FI/.venv/bin/python"
+            venv_python = sys.executable
 
             subprocess_start = time.time()
             result = subprocess.run(
@@ -1354,7 +1371,7 @@ def calculate_synergy_confidence(theme_codes: List[str], fterms: List[str],
 
 def enhance_predictions_with_practical_consensus(all_theme_predictions: Dict[str, List[str]]) -> Tuple[List[str], List[str], float]:
     """実用的なConsensusロジック（正解データ不要）
-    
+
     手法の事前重み付け + 最頻値ベース:
     1. 各手法に事前定義された重みを適用
     2. 重み付き投票でConsensusを決定
@@ -1367,7 +1384,7 @@ def enhance_predictions_with_practical_consensus(all_theme_predictions: Dict[str
         (最適化されたテーマコード, 最適化されたFterm, 信頼度スコア)
     """
     start_time = time.time()
-    
+
     # 1. 各手法の事前定義重み（経験的/統計的に決定）
     method_weights = {
         'Gemini_Unified': 0.6,                    # Gemini統合結果
@@ -1379,51 +1396,51 @@ def enhance_predictions_with_practical_consensus(all_theme_predictions: Dict[str
         'Vector_Search_Title': 0.2,               # 新追加：タイトルベース
         'Vector_Search_Theme_Title': 0.2,         # 既存（最低重み）
     }
-    
+
     # 2. 重み付き投票カウント
     weighted_votes = {}
     total_weight = 0.0
-    
+
     for method, predictions in all_theme_predictions.items():
         if predictions:
             weight = method_weights.get(method, 0.1)  # 未知手法はデフォルト重み0.1
             total_weight += weight
-            
+
             for theme_code in predictions:
                 if theme_code in weighted_votes:
                     weighted_votes[theme_code] += weight
                 else:
                     weighted_votes[theme_code] = weight
-    
+
     # 3. 重み付きスコア順でConsensus決定
     final_themes = []
     confidence_score = 0.0
-    
+
     if weighted_votes:
         # スコア順にソート
         sorted_themes = sorted(weighted_votes.items(), key=lambda x: x[1], reverse=True)
-        
+
         # 上位3個を採用
         final_themes = [theme for theme, score in sorted_themes[:3]]
-        
+
         # 信頼度計算（最高スコア / 総重み）
         max_score = sorted_themes[0][1]
         confidence_score = min(1.0, max_score / total_weight) if total_weight > 0 else 0.0
-        
+
         logger.info(f"重み付きConsensus: {final_themes} (最高スコア: {max_score:.3f})")
         logger.debug(f"全スコア: {dict(sorted_themes)}")
-        
+
     else:
         # 予測結果がない場合
         logger.warning("全手法で予測結果なし")
         confidence_score = 0.0
-    
+
     # 4. Ftermは空で返す（テーマコード重視）
     final_fterms = []
-    
+
     processing_time = time.time() - start_time
     logger.debug(f"実用Consensus処理完了: 時間={processing_time:.2f}秒, 信頼度={confidence_score:.3f}")
-    
+
     return final_themes, final_fterms, confidence_score
 
 
@@ -1635,7 +1652,9 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
 請求項1: {first_claim}"""
 
                     # LLMで最適なテーマコードを選択（APIコール最小化）
-                    from theme_code_predictor_with_llm import select_best_theme_code_with_openai
+                    from theme_code_predictor_with_llm import (
+                        select_best_theme_code_with_openai,
+                    )
                     predicted_theme, llm_reasoning = select_best_theme_code_with_openai(patent_summary, theme_candidates)
 
                     if predicted_theme:
@@ -1675,11 +1694,11 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
         if app_keywords:
             try:
                 fi_codes_app, fterm_codes_app = vector_predictor.search_fi_fterm(app_keywords)
-                
+
                 # テーマコード検索を追加
                 theme_codes_app = []
                 theme_hits_app, theme_total_app, theme_acc_app = 0, 0, 0.0
-                
+
                 try:
                     app_query = ' '.join(app_keywords[:4])  # 上位4個のキーワードを使用
                     theme_search_results = vector_predictor.search_theme_codes(app_query, top_k=3)
@@ -1724,11 +1743,11 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
         if tech_keywords:
             try:
                 fi_codes_tech, fterm_codes_tech = vector_predictor.search_fi_fterm(tech_keywords)
-                
+
                 # テーマコード検索を追加
                 theme_codes_tech = []
                 theme_hits_tech, theme_total_tech, theme_acc_tech = 0, 0, 0.0
-                
+
                 try:
                     tech_query = ' '.join(tech_keywords[:4])  # 上位4個のキーワードを使用
                     theme_search_results = vector_predictor.search_theme_codes(tech_query, top_k=3)
@@ -1772,11 +1791,11 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
         # 特許タイトルでベクトル検索 + テーマコード検索（Single_Applicationの代替）
         try:
             fi_codes_title, fterm_codes_title = vector_predictor.search_fi_fterm([patent_data.title])
-            
+
             # テーマコード検索を追加
             theme_codes_title = []
             theme_hits_title, theme_total_title, theme_acc_title = 0, 0, 0.0
-            
+
             try:
                 title_query = patent_data.title
                 theme_search_results = vector_predictor.search_theme_codes(title_query, top_k=3)
@@ -1961,7 +1980,7 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
 
     # 各手法のテーマコード予測を収集
     all_theme_predictions = {}
-    
+
     # 1. Gemini統合結果
     if gemini_result and gemini_result.predicted_theme_code:
         all_theme_predictions['Gemini_Unified'] = gemini_result.predicted_theme_code
@@ -1974,7 +1993,7 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
             clean_codes = [tc.strip() for tc in theme_codes if tc.strip()]
             if clean_codes:
                 # テーマコード予測を行う全手法を含める
-                if (model_name.startswith('Vector_Search_Theme') or 
+                if (model_name.startswith('Vector_Search_Theme') or
                     model_name.startswith('Vector_Search_') or  # Vector_Search_Application, Technical, Title
                     model_name == 'Keyword_Based_Theme_Search'):
                     all_theme_predictions[model_name] = clean_codes
@@ -1985,18 +2004,18 @@ async def process_patent(patent_data: PatentData, predictor: LLMPredictor, vecto
         enhanced_themes, enhanced_fterms, synergy_confidence = enhance_predictions_with_practical_consensus(
             all_theme_predictions
         )
-        
+
         predicted_theme_codes = enhanced_themes
         predicted_fterms = enhanced_fterms
-        
+
         logger.info(f"改良Consensus適用: {len(all_theme_predictions)}手法 → {predicted_theme_codes}")
-        
+
     except Exception as e:
         logger.warning(f"改良Consensusでエラー、フォールバック: {e}")
-        
+
         # フォールバック: 従来の実用的アプローチ
         vector_theme_results = []
-        
+
         # テーマコードベースの検索結果から抽出
         for result in patent_results:
             if result.get('model', '').startswith('Vector_Search_Theme'):

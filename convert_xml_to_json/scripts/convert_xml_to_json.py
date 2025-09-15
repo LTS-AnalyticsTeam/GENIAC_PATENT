@@ -1,21 +1,23 @@
-import xml.etree.ElementTree as ET
-import json
-from datetime import datetime
-import hashlib
-import os
-import glob
-import csv
 import argparse
+import csv
+import glob
+import hashlib
+import json
+import os
 import time
-from parser import parse_patent_xml, find_xml_file_by_patent_code
-from config import INPUT_DIR, OUTPUT_DIR
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from parser import find_xml_file_by_patent_code, parse_patent_xml
 from typing import Optional
+
+from config import INPUT_DIR, OUTPUT_DIR
+
 
 def process_xml_file(xml_path):
     try:
         data = parse_patent_xml(xml_path)
         return (xml_path, data, None)
-    
+
     except Exception as e:
         return (xml_path, None, str(e))
 
@@ -74,4 +76,4 @@ def main():
             print(f"[{done}/{total}] Processed: {xml_path} -> {output_filename}")
 
 if __name__ == "__main__":
-    main() 
+    main()

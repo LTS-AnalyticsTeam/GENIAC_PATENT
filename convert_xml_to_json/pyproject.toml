@@ -14,6 +14,15 @@ gensim = "^4.3.3"
 mecab-python3 = "^1.0.8"
 scikit-learn = "^1.4.0"
 azure-cosmos = "^4.9.0"
+python-dotenv = "^1.1.1"
+openai = "^1.107.2"
+azure-search-documents = "^11.5.3"
+google-generativeai = "^0.8.5"
+spacy = "^3.8.7"
+ginza = "^5.2.0"
+ja-ginza = "^5.2.0"
+sudachidict-core = "^20250825"
+pandas = "^2.3.2"
 
 [build-system]
 requires = ["poetry-core"]

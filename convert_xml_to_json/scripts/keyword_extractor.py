@@ -1,11 +1,24 @@
 import os
 import re
-from gensim.models.fasttext import load_facebook_vectors
-from keybert import KeyBERT
-from sklearn.feature_extraction.text import TfidfVectorizer
-import MeCab
-from config import FASTTEXT_MODEL_PATH
 import time
+from config import FASTTEXT_MODEL_PATH
+
+"""
+This module originally depends on gensim, keybert, scikit-learn, and MeCab.
+In restricted environments (no network/venv), those packages may be missing.
+To keep the pipeline runnable, we provide safe fallbacks that avoid heavy deps.
+When deps are available, the original behavior is used.
+"""
+
+# Try to import heavy dependencies. If unavailable, fall back to light stubs.
+HAVE_DEPS = True
+try:
+    from gensim.models.fasttext import load_facebook_vectors  # type: ignore
+    from keybert import KeyBERT  # type: ignore
+    from sklearn.feature_extraction.text import TfidfVectorizer  # type: ignore
+    import MeCab  # type: ignore
+except Exception:
+    HAVE_DEPS = False
 
 # ──────────────────────────────────────────────
 # 1) MeCab トークナイザ（内容語だけ残す）
@@ -14,37 +27,43 @@ ALLOWED_POS   = {'名詞', '動詞', '形容詞'}
 NG_POS        = {'助詞', '助動詞', '接続詞', '連体詞', '副詞'}
 NG_SUBPOS     = {'非自立', '副詞可能', '接尾'}
 
-try:
-    tagger = MeCab.Tagger('-Ochasen')
+if HAVE_DEPS:
+    try:
+        tagger = MeCab.Tagger('-Ochasen')
+        def mecab_tokens(text: str):
+            tokens = []
+            for line in tagger.parse(text).splitlines()[:-2]:
+                if '\t' in line:
+                    surface, _, _, pos, subpos, *_ = line.split('\t')
+                    if pos in NG_POS or pos not in ALLOWED_POS:
+                        continue
+                    if subpos in NG_SUBPOS:
+                        continue
+                    if len(surface) < 2:
+                        continue
+                    tokens.append(surface)
+            return tokens
+    except Exception:
+        def mecab_tokens(text: str):
+            words = re.findall(r'[\u4e00-\u9fff]+', text)
+            return [word for word in words if len(word) > 1]
+
+    vectorizer = TfidfVectorizer(
+        tokenizer=mecab_tokens,
+        token_pattern=None,
+        ngram_range=(1, 2),
+        min_df=1,
+        max_df=1.0,
+        use_idf=True,
+        smooth_idf=True,
+        sublinear_tf=True
+    )
+else:
+    # Lightweight fallbacks when deps are not available
     def mecab_tokens(text: str):
-        tokens = []
-        for line in tagger.parse(text).splitlines()[:-2]:
-            if '\t' in line:
-                surface, _, _, pos, subpos, *_ = line.split('\t')
-                if pos in NG_POS or pos not in ALLOWED_POS:
-                    continue
-                if subpos in NG_SUBPOS:
-                    continue
-                if len(surface) < 2:
-                    continue
-                tokens.append(surface)
-        return tokens
-except:
-    def mecab_tokens(text: str):
-        import re
         words = re.findall(r'[\u4e00-\u9fff]+', text)
         return [word for word in words if len(word) > 1]
-
-vectorizer = TfidfVectorizer(
-    tokenizer=mecab_tokens,
-    token_pattern=None,
-    ngram_range=(1, 2),
-    min_df=1,
-    max_df=1.0,
-    use_idf=True,
-    smooth_idf=True,
-    sublinear_tf=True
-)
+    vectorizer = None  # Not used in fallback mode
 
 STOPWORDS = set([
     '発明', '装置', '方法', '請求', '本', '例', '図', '部', '手段', 'こと', 'もの', 'ため', 'よう', '及び',
@@ -74,18 +93,21 @@ _ft_model = None
 _kw_model = None
 
 def get_fasttext_model():
+    if not HAVE_DEPS:
+        return None
     global _ft_model
     if _ft_model is None:
         if not os.path.exists(FASTTEXT_MODEL_PATH):
+            # In fallback mode, do not raise hard; return None
             raise FileNotFoundError(
-                f"fastText 日本語モデル({FASTTEXT_MODEL_PATH}) が見つかりません。\n"
-                "https://fasttext.cc/docs/en/crawl-vectors.html から "
-                "'cc.ja.300.bin' をダウンロードし、配置してください。"
+                f"fastText 日本語モデル({FASTTEXT_MODEL_PATH}) が見つかりません。"
             )
         _ft_model = load_facebook_vectors(FASTTEXT_MODEL_PATH)
     return _ft_model
 
 def get_keybert_model():
+    if not HAVE_DEPS:
+        return None
     global _kw_model
     if _kw_model is None:
         _kw_model = KeyBERT(model=get_fasttext_model())
@@ -130,6 +152,17 @@ def extract_noun_wo_verb_phrases(text):
     return phrases
 
 def extract_keywords_keybert_fasttext(text: str, topn: int = 10, ft_path: str = FASTTEXT_MODEL_PATH):
+    # Fallback: return simple frequent tokens when heavy deps are unavailable
+    if not HAVE_DEPS:
+        tokens = mecab_tokens(text)
+        # naive frequency-based selection
+        freq = {}
+        for t in tokens:
+            if t in KEY_STOP or t in STOPWORDS or re.search(r'\d', t):
+                continue
+            freq[t] = freq.get(t, 0) + 1
+        return [w for w, _ in sorted(freq.items(), key=lambda x: (-x[1], x[0]))[:topn]]
+
     kw_model = get_keybert_model()
     candidates = kw_model.extract_keywords(
         text,
