@@ -2,3 +2,8 @@ fastapi==0.111.0          # 2025‑06 時点の安定版
 uvicorn[standard]==0.30.0
 elasticsearch==8.13.1     # クライアントも ES 8 系
 python-dotenv==1.0.1      # （任意）環境変数ファイルを使う場合
+openai==1.3.0             # Azure OpenAI API for embeddings (compatible version)
+httpx==0.24.1             # HTTP client (compatible version)
+azure-identity==1.15.0    # Azure authentication
+azure-core==1.29.5        # Azure core functionality
+pydantic==2.7.4           # Data validation

@@ -1,0 +1,34 @@
+{
+  "timestamp": "2025-08-17T22:00:18.588569",
+  "basic_counts": {
+    "cosmos_total": 39680,
+    "elasticsearch_total": 34329,
+    "difference": 5351,
+    "match_percentage": 86.51,
+    "elasticsearch_size_mb": 2355.78,
+    "counts_match": false,
+    "connection_status": {
+      "cosmos_connected": true,
+      "elasticsearch_connected": true
+    }
+  },
+  "sample_validation": {
+    "sample_size": 1000,
+    "valid_documents": 1000,
+    "invalid_documents": 0,
+    "missing_in_cosmos_count": 0,
+    "success_rate": 100.0,
+    "missing_in_cosmos_sample": [],
+    "validation_errors_sample": []
+  },
+  "missing_documents": [],
+  "failed_documents_analysis": {
+    "total_failed": 0,
+    "analysis": "失敗ドキュメントはありません"
+  },
+  "recommendations": [
+    "🔄 5,351件のドキュメントが不足しています。失敗したドキュメントの再処理を検討してください。",
+    "🛠️ 問題の修正後、再度整合性チェックを実行することを推奨します。"
+  ],
+  "duration_seconds": 57.148903
+}

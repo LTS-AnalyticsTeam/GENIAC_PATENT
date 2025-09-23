@@ -1,0 +1,12 @@
+{
+  "start_time": "2025-08-17 22:31:23.834023",
+  "end_time": "2025-08-17 22:31:32.432558",
+  "total_failed_found": 1,
+  "retry_attempted": 0,
+  "retry_successful": 0,
+  "retry_failed": 1,
+  "skipped": 0,
+  "errors": [
+    "エンベディング失敗: 2022502226"
+  ]
+}

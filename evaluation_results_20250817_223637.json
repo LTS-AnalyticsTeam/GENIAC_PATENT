@@ -1,0 +1,1362 @@
+[
+  {
+    "case_id": "CASE_0155",
+    "syutugan": "JP2017080220A",
+    "expected": "JP2015163142A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2015163142A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2015163142A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2017080220A",
+      "JP2019030724A",
+      "JP2017080214A",
+      "JP2018130271A",
+      "JP2017140219A"
+    ]
+  },
+  {
+    "case_id": "CASE_0365",
+    "syutugan": "JP2018143828A",
+    "expected": "JP2018042603A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018042603A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018042603A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2018143828A",
+      "JP2018143827A",
+      "JP2020000439A",
+      "JP2020036986A",
+      "JP2018099545A"
+    ]
+  },
+  {
+    "case_id": "CASE_0445",
+    "syutugan": "JP2019003580A",
+    "expected": "JP2016024739A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2011039909A",
+      "JP2016024739A"
+    ],
+    "es_found": true,
+    "es_rank": 2,
+    "es_top5": [
+      "JP2011039909A",
+      "JP2016024739A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2019003580A",
+      "JP2023059537A",
+      "JP2019025067A",
+      "JP2023042305A",
+      "JP2021016475A"
+    ]
+  },
+  {
+    "case_id": "CASE_0466",
+    "syutugan": "JP2019024709A",
+    "expected": "JP2017086980A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017086980A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2017086980A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2019024709A",
+      "JP2019115767A",
+      "JP2018164595A",
+      "JP2017000845A",
+      "JP2018050779A"
+    ]
+  },
+  {
+    "case_id": "CASE_0493",
+    "syutugan": "JP2019044061A",
+    "expected": "JP2018044095A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018044095A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018044095A"
+    ],
+    "vector_found": true,
+    "vector_rank": 8,
+    "vector_top5": [
+      "JP2019044061A",
+      "JP2020097726A",
+      "JP2010065171A",
+      "JP2018194149A",
+      "JP2021025653A"
+    ]
+  },
+  {
+    "case_id": "CASE_0545",
+    "syutugan": "JP2019092716A",
+    "expected": "JP2017195914A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017195914A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2017195914A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2019092717A",
+      "JP2019092716A",
+      "JP2018187177A",
+      "JP2021083764A",
+      "JP2021016614A"
+    ]
+  },
+  {
+    "case_id": "CASE_0560",
+    "syutugan": "JP2019111137A",
+    "expected": "JP2019111141A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019111141A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019111141A"
+    ],
+    "vector_found": true,
+    "vector_rank": 7,
+    "vector_top5": [
+      "JP2019111137A",
+      "JP2019111135A",
+      "JP2019111132A",
+      "JP2018043099A",
+      "JP2018043100A"
+    ]
+  },
+  {
+    "case_id": "CASE_0561",
+    "syutugan": "JP2019111141A",
+    "expected": "JP2019111137A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019111137A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019111137A"
+    ],
+    "vector_found": true,
+    "vector_rank": 4,
+    "vector_top5": [
+      "JP2019111141A",
+      "JP2019111139A",
+      "JP2019111140A",
+      "JP2019111137A",
+      "JP2019111135A"
+    ]
+  },
+  {
+    "case_id": "CASE_0563",
+    "syutugan": "JP2019111457A",
+    "expected": "JP2016106897A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2011078515A",
+      "JP2016106897A"
+    ],
+    "es_found": true,
+    "es_rank": 2,
+    "es_top5": [
+      "JP2011078515A",
+      "JP2016106897A"
+    ],
+    "vector_found": true,
+    "vector_rank": 1,
+    "vector_top5": [
+      "JP2016106897A",
+      "JP2019111457A",
+      "JP2017140178A",
+      "JP2016163741A",
+      "JP2018068804A"
+    ]
+  },
+  {
+    "case_id": "CASE_0566",
+    "syutugan": "JP2019116049A",
+    "expected": "JP2017222154A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017222154A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2017222154A"
+    ],
+    "vector_found": true,
+    "vector_rank": 7,
+    "vector_top5": [
+      "JP2019116049A",
+      "JP2021146562A",
+      "JP2022008440A",
+      "JP2020128540A",
+      "JP2020139134A"
+    ]
+  },
+  {
+    "case_id": "CASE_0618",
+    "syutugan": "JP2019150524A",
+    "expected": "JP2017108952A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017108952A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2017108952A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2019150524A",
+      "JP2021120112A",
+      "JP2021019720A",
+      "JP2022071286A",
+      "JP2019146773A"
+    ]
+  },
+  {
+    "case_id": "CASE_0654",
+    "syutugan": "JP2019184855A",
+    "expected": "JP2017181094A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017181094A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2017181094A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2019184855A",
+      "JP2021146594A",
+      "JP2017228877A",
+      "JP2010010826A",
+      "JP2021169155A"
+    ]
+  },
+  {
+    "case_id": "CASE_0658",
+    "syutugan": "JP2019187957A",
+    "expected": "JP2017213260A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018015134A",
+      "JP2017213260A"
+    ],
+    "es_found": true,
+    "es_rank": 2,
+    "es_top5": [
+      "JP2018015134A",
+      "JP2017213260A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2019187957A",
+      "JP2019201676A",
+      "JP2017077366A",
+      "JP2017077369A",
+      "JP2018202095A"
+    ]
+  },
+  {
+    "case_id": "CASE_0745",
+    "syutugan": "JP2020018344A",
+    "expected": "JP2018078944A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018078944A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018078944A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020018344A",
+      "JP2020032030A",
+      "JP2020130361A",
+      "JP2020018346A",
+      "JP2020130360A"
+    ]
+  },
+  {
+    "case_id": "CASE_0769",
+    "syutugan": "JP2020036637A",
+    "expected": "JP2015100507A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2015100507A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2015100507A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_0771",
+    "syutugan": "JP2020036782A",
+    "expected": "JP2018126213A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018126213A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018126213A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020036782A",
+      "JP2022166419A",
+      "JP2019187703A",
+      "JP2019187861A",
+      "JP2021098133A"
+    ]
+  },
+  {
+    "case_id": "CASE_0803",
+    "syutugan": "JP2020056884A",
+    "expected": "JP2017116905A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017116905A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2017116905A"
+    ],
+    "vector_found": true,
+    "vector_rank": 5,
+    "vector_top5": [
+      "JP2020056884A",
+      "JP2019120813A",
+      "JP2021018410A",
+      "JP2020056883A",
+      "JP2017116905A"
+    ]
+  },
+  {
+    "case_id": "CASE_0808",
+    "syutugan": "JP2020058614A",
+    "expected": "JP2018134244A",
+    "cosmos_found": false,
+    "cosmos_results": [],
+    "es_found": false,
+    "es_rank": -1,
+    "es_top5": [],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020058614A",
+      "JP2020058620A",
+      "JP2021122584A",
+      "JP2022113528A",
+      "JP2018140105A"
+    ]
+  },
+  {
+    "case_id": "CASE_0809",
+    "syutugan": "JP2020058716A",
+    "expected": "JP2018143656A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018143656A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018143656A"
+    ],
+    "vector_found": true,
+    "vector_rank": 5,
+    "vector_top5": [
+      "JP2020068851A",
+      "JP2020058716A",
+      "JP2020058715A",
+      "JP2020068850A",
+      "JP2018143656A"
+    ]
+  },
+  {
+    "case_id": "CASE_0821",
+    "syutugan": "JP2020068851A",
+    "expected": "JP2018143656A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018143656A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018143656A"
+    ],
+    "vector_found": true,
+    "vector_rank": 5,
+    "vector_top5": [
+      "JP2020068851A",
+      "JP2020058716A",
+      "JP2020058715A",
+      "JP2020068850A",
+      "JP2018143656A"
+    ]
+  },
+  {
+    "case_id": "CASE_0829",
+    "syutugan": "JP2020081095A",
+    "expected": "JP2018175328A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018086157A",
+      "JP2018175328A"
+    ],
+    "es_found": true,
+    "es_rank": 2,
+    "es_top5": [
+      "JP2018086157A",
+      "JP2018175328A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020081095A",
+      "JP2020081102A",
+      "JP2020081101A",
+      "JP2020028772A",
+      "JP2020028773A"
+    ]
+  },
+  {
+    "case_id": "CASE_0855",
+    "syutugan": "JP2020096650A",
+    "expected": "JP2018038642A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018038642A",
+      "JP2018061733A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018038642A",
+      "JP2018061733A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020096650A",
+      "JP2020089523A",
+      "JP2020089524A",
+      "JP2021016504A",
+      "JP2021016503A"
+    ]
+  },
+  {
+    "case_id": "CASE_0893",
+    "syutugan": "JP2020120891A",
+    "expected": "JP2018187480A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018187480A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018187480A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020120891A",
+      "JP2020120884A",
+      "JP2020120885A",
+      "JP2020120883A",
+      "JP2021184933A"
+    ]
+  },
+  {
+    "case_id": "CASE_0905",
+    "syutugan": "JP2020127515A",
+    "expected": "JP2018166729A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018166729A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018166729A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020127515A",
+      "JP2020127516A",
+      "JP2021097781A",
+      "JP2021097791A",
+      "JP2021097792A"
+    ]
+  },
+  {
+    "case_id": "CASE_0906",
+    "syutugan": "JP2020127516A",
+    "expected": "JP2018166729A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018166729A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018166729A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020127516A",
+      "JP2020127515A",
+      "JP2021097781A",
+      "JP2021097791A",
+      "JP2021097792A"
+    ]
+  },
+  {
+    "case_id": "CASE_0912",
+    "syutugan": "JP2020130352A",
+    "expected": "JP2015080606A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2015080606A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2015080606A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020130352A",
+      "JP2021126556A",
+      "JP2020120739A",
+      "JP2020074900A",
+      "JP2020069030A"
+    ]
+  },
+  {
+    "case_id": "CASE_0913",
+    "syutugan": "JP2020130381A",
+    "expected": "JP2019000319A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019000319A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019000319A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020130381A",
+      "JP2020025766A",
+      "JP2020025768A",
+      "JP2020025767A",
+      "JP2020175027A"
+    ]
+  },
+  {
+    "case_id": "CASE_0960",
+    "syutugan": "JP2020171155A",
+    "expected": "JP2019221057A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019221057A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019221057A"
+    ],
+    "vector_found": true,
+    "vector_rank": 2,
+    "vector_top5": [
+      "JP2020171155A",
+      "JP2019221057A",
+      "JP2019022277A",
+      "JP2020137130A",
+      "JP2016067146A"
+    ]
+  },
+  {
+    "case_id": "CASE_0971",
+    "syutugan": "JP2020178764A",
+    "expected": "JP2018023886A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017035126A",
+      "JP2018023886A"
+    ],
+    "es_found": true,
+    "es_rank": 2,
+    "es_top5": [
+      "JP2017035126A",
+      "JP2018023886A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2020178764A",
+      "JP2021126243A",
+      "JP2019150377A",
+      "JP2020081697A",
+      "JP2020162690A"
+    ]
+  },
+  {
+    "case_id": "CASE_0986",
+    "syutugan": "JP2020185453A",
+    "expected": "JP2019000447A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019000447A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019000447A"
+    ],
+    "vector_found": true,
+    "vector_rank": 4,
+    "vector_top5": [
+      "JP2020185453A",
+      "JP2020185492A",
+      "JP2019107171A",
+      "JP2019000447A",
+      "JP2019107173A"
+    ]
+  },
+  {
+    "case_id": "CASE_0987",
+    "syutugan": "JP2020185454A",
+    "expected": "JP2019000451A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019000451A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019000451A"
+    ],
+    "vector_found": true,
+    "vector_rank": 3,
+    "vector_top5": [
+      "JP2020185454A",
+      "JP2020171831A",
+      "JP2019000451A",
+      "JP2020171827A",
+      "JP2019017902A"
+    ]
+  },
+  {
+    "case_id": "CASE_1027",
+    "syutugan": "JP2021003440A",
+    "expected": "JP2018175053A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018175053A",
+      "JP2019069325A"
+    ],
+    "es_found": true,
+    "es_rank": 2,
+    "es_top5": [
+      "JP2019069325A",
+      "JP2018175053A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2021003387A",
+      "JP2021003440A",
+      "JP2021003385A",
+      "JP2021003384A",
+      "JP2021003388A"
+    ]
+  },
+  {
+    "case_id": "CASE_1030",
+    "syutugan": "JP2021006134A",
+    "expected": "JP2019000452A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019000452A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019000452A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2021006134A",
+      "JP2021006133A",
+      "JP2020151347A",
+      "JP2019150321A",
+      "JP2019150320A"
+    ]
+  },
+  {
+    "case_id": "CASE_1065",
+    "syutugan": "JP2021037176A",
+    "expected": "JP2017221468A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017221468A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2017221468A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2021037176A",
+      "JP2021040848A",
+      "JP2017051481A",
+      "JP2016158877A",
+      "JP2019037567A"
+    ]
+  },
+  {
+    "case_id": "CASE_1104",
+    "syutugan": "JP2021069790A",
+    "expected": "JP2019180868A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019180868A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019180868A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2021069790A",
+      "JP2019042404A",
+      "JP2020010993A",
+      "JP2021132988A",
+      "JP2020065660A"
+    ]
+  },
+  {
+    "case_id": "CASE_1112",
+    "syutugan": "JP2021078826A",
+    "expected": "JP2018015053A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018015053A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018015053A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1145",
+    "syutugan": "JP2021098772A",
+    "expected": "JP2018028087A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2018028087A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2018028087A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2021098772A",
+      "JP2018168213A",
+      "JP2016204593A",
+      "JP2020132780A",
+      "JP2020094087A"
+    ]
+  },
+  {
+    "case_id": "CASE_1148",
+    "syutugan": "JP2021100729A",
+    "expected": "JP2021029525A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2021029525A",
+      "JP2020116087A"
+    ],
+    "es_found": true,
+    "es_rank": 2,
+    "es_top5": [
+      "JP2020116087A",
+      "JP2021029525A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2021100729A",
+      "JP2022162200A",
+      "JP2021166880A",
+      "JP2021166879A",
+      "JP2019201776A"
+    ]
+  },
+  {
+    "case_id": "CASE_1161",
+    "syutugan": "JP2021109952A",
+    "expected": "JP2019151706A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019151706A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019151706A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2021109952A",
+      "JP2019210419A",
+      "JP2016199762A",
+      "JP2015187187A",
+      "JP2019031586A"
+    ]
+  },
+  {
+    "case_id": "CASE_1202",
+    "syutugan": "JP2021148587A",
+    "expected": "JP2019128232A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019128232A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019128232A"
+    ],
+    "vector_found": true,
+    "vector_rank": 2,
+    "vector_top5": [
+      "JP2021148587A",
+      "JP2019128232A",
+      "JP2020122858A",
+      "JP2021148884A",
+      "JP2021148883A"
+    ]
+  },
+  {
+    "case_id": "CASE_1215",
+    "syutugan": "JP2021159220A",
+    "expected": "JP2017144012A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2017144012A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2017144012A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2021159220A",
+      "JP2019115682A",
+      "JP2017035384A",
+      "JP2018143564A",
+      "JP2016112193A"
+    ]
+  },
+  {
+    "case_id": "CASE_1225",
+    "syutugan": "JP2021166835A",
+    "expected": "JP2021104294A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2021104294A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2021104294A"
+    ],
+    "vector_found": true,
+    "vector_rank": 7,
+    "vector_top5": [
+      "JP2021166835A",
+      "JP2021145909A",
+      "JP2021145908A",
+      "JP2021145910A",
+      "JP2021045305A"
+    ]
+  },
+  {
+    "case_id": "CASE_1247",
+    "syutugan": "JP2021182955A",
+    "expected": "JP2019051050A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019170767A",
+      "JP2019051050A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019051050A",
+      "JP2019170767A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1315",
+    "syutugan": "JP2022056451A",
+    "expected": "JP2021003364A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2021003364A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2021003364A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2022056451A",
+      "JP2019042312A",
+      "JP2019042327A",
+      "JP2019013600A",
+      "JP2019013583A"
+    ]
+  },
+  {
+    "case_id": "CASE_1317",
+    "syutugan": "JP2022057459A",
+    "expected": "JP2016131570A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2016131570A",
+      "JP2018015095A"
+    ],
+    "es_found": true,
+    "es_rank": 2,
+    "es_top5": [
+      "JP2018015095A",
+      "JP2016131570A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1333",
+    "syutugan": "JP2022079658A",
+    "expected": "JP2021007447A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2021007447A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2021007447A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1337",
+    "syutugan": "JP2022084581A",
+    "expected": "JP2019524260A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019524260A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019524260A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1380",
+    "syutugan": "JP2022130472A",
+    "expected": "JP2019515653A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019515653A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019515653A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1383",
+    "syutugan": "JP2022140025A",
+    "expected": "JP2019059935A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019059935A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019059935A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2022140025A",
+      "JP2021075582A",
+      "JP2017179157A",
+      "JP2021054878A",
+      "JP2018080287A"
+    ]
+  },
+  {
+    "case_id": "CASE_1399",
+    "syutugan": "JP2022166420A",
+    "expected": "JP2019083896A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019083896A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019083896A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2022166420A",
+      "JP2022166421A",
+      "JP2022166407A",
+      "JP2022166429A",
+      "JP2022166417A"
+    ]
+  },
+  {
+    "case_id": "CASE_1428",
+    "syutugan": "JP2022502779A",
+    "expected": "JP2022503818A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2022503818A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2022503818A"
+    ],
+    "vector_found": true,
+    "vector_rank": 2,
+    "vector_top5": [
+      "JP2022502779A",
+      "JP2022503818A",
+      "JP2022040020A",
+      "JP2022162696A",
+      "JP2021051502A"
+    ]
+  },
+  {
+    "case_id": "CASE_1429",
+    "syutugan": "JP2022503818A",
+    "expected": "JP2022502779A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2022502779A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2022502779A"
+    ],
+    "vector_found": true,
+    "vector_rank": 2,
+    "vector_top5": [
+      "JP2022503818A",
+      "JP2022502779A",
+      "JP2022040020A",
+      "JP2022162696A",
+      "JPWO2017171045A"
+    ]
+  },
+  {
+    "case_id": "CASE_1455",
+    "syutugan": "JP2023021338A",
+    "expected": "JP2019098040A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019098040A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019098040A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1456",
+    "syutugan": "JP2023022625A",
+    "expected": "JP2016046233A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2016046233A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2016046233A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2023022625A",
+      "JP2018181837A",
+      "JP2021064456A",
+      "JP2022075142A",
+      "JP2019125444A"
+    ]
+  },
+  {
+    "case_id": "CASE_1470",
+    "syutugan": "JP2023045705A",
+    "expected": "JP2019000316A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019000316A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019000316A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2023045693A",
+      "JP2023045719A",
+      "JP2023058893A",
+      "JP2023045705A",
+      "JP2023045721A"
+    ]
+  },
+  {
+    "case_id": "CASE_1475",
+    "syutugan": "JP2023048234A",
+    "expected": "JP2020116319A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2010246807A",
+      "JP2020116319A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2020116319A",
+      "JP2010246807A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": [
+      "JP2023048234A",
+      "JP2023048229A",
+      "JP2023048230A",
+      "JP2023048228A",
+      "JP2023048233A"
+    ]
+  },
+  {
+    "case_id": "CASE_1476",
+    "syutugan": "JP2023053096A",
+    "expected": "JP2020059140A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2020059140A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2020059140A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1482",
+    "syutugan": "JP2023054032A",
+    "expected": "JP2019033936A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019033936A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019033936A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1483",
+    "syutugan": "JP2023054033A",
+    "expected": "JP2019033936A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019033936A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019033936A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1484",
+    "syutugan": "JP2023054034A",
+    "expected": "JP2019033936A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2019033936A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2019033936A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1523",
+    "syutugan": "JP2024054527A",
+    "expected": "JP2022160798A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2022160798A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2022160798A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  },
+  {
+    "case_id": "CASE_1622",
+    "syutugan": "JPWO2021059806A1",
+    "expected": "JP2016135732A",
+    "cosmos_found": true,
+    "cosmos_results": [
+      "JP2016135732A"
+    ],
+    "es_found": true,
+    "es_rank": 1,
+    "es_top5": [
+      "JP2016135732A"
+    ],
+    "vector_found": false,
+    "vector_rank": -1,
+    "vector_top5": []
+  }
+]

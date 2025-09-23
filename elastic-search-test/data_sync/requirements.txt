@@ -1,0 +1,23 @@
+# Data Sync Dependencies
+
+# Azure Cosmos DB
+azure-cosmos==4.5.1
+
+# Azure OpenAI for embeddings
+openai==1.35.0
+azure-identity==1.15.0
+azure-core==1.29.5
+tiktoken==0.7.0
+
+# Elasticsearch
+elasticsearch==8.13.1
+
+# Async support
+asyncio==3.4.3
+aiohttp==3.9.5
+
+# Environment and utilities
+python-dotenv==1.0.1
+
+# Logging
+colorlog==6.8.0

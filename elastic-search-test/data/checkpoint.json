@@ -1,0 +1,23 @@
+{
+  "batch_num": 397,
+  "completed": true,
+  "timestamp": "2025-08-17T11:04:37.299735",
+  "stats": {
+    "start_time": "2025-08-17 09:41:52.313864",
+    "end_time": "2025-08-17 11:04:37.093818",
+    "total_documents": 39680,
+    "documents_processed": 39680,
+    "documents_indexed": 34279,
+    "documents_failed": 5400,
+    "embeddings_generated": 39679,
+    "embeddings_failed": 1,
+    "errors": []
+  },
+  "checkpoint_version": "2.0",
+  "saved_at": "2025-08-17T11:04:37.299783",
+  "process_id": 65074,
+  "validation": {
+    "documents_processed_valid": true,
+    "no_negative_counts": true
+  }
+}
