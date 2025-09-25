@@ -1,0 +1,4 @@
+.env
+elastic-search-test/.env
+!elastic-search-test/.env.example
+
