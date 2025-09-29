@@ -72,6 +72,7 @@ async def process_row(row: Dict[str, str], k: int, num_queries: int, min_score: 
         "best_rank": "",
         "matched_title": "",
         "per_query_hits": "",
+        "generated_queries": "",
         "error": "",
     }
 
@@ -90,6 +91,10 @@ async def process_row(row: Dict[str, str], k: int, num_queries: int, min_score: 
 
         result["unique_results"] = int(res.get("unique_results", len(merged)))
         result["per_query_hits"] = ";".join(str(x) for x in per_query_hits)
+        queries = res.get("generated_queries", [])
+        if isinstance(queries, list):
+            cleaned = [str(q).replace("\n", " ").strip() for q in queries]
+            result["generated_queries"] = " || ".join(cleaned)
 
         if ax_docs in ids:
             idx = ids.index(ax_docs)
@@ -156,6 +161,7 @@ def main():
         "best_rank",
         "matched_title",
         "per_query_hits",
+        "generated_queries",
         "error",
     ]
     with out_path.open("w", encoding="utf-8", newline="") as f:
@@ -168,4 +174,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
