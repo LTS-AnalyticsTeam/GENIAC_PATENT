@@ -16,6 +16,8 @@
         "8000"
       ],
       "console": "integratedTerminal",
+      "preLaunchTask": "Install backend requirements",
+      "python": "${workspaceFolder}/backend/.venv/bin/python",
       "justMyCode": true
     },
     {
