@@ -1,0 +1,9 @@
+.env
+elastic-search-test/.env
+!elastic-search-test/.env.example
+.venv/
+*.pyc
+F-TERM/data/
+F-TERM/output/
+FI/data/
+FI/output/
