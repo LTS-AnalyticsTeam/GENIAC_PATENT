@@ -12,6 +12,9 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+VECTOR_FIELD = os.getenv("ES_VECTOR_FIELD", "claims_vector")
+CLAIMS_TOP3_FIELD = os.getenv("ES_CLAIMS_TOP3_FIELD", "claims_top3_text")
+
 
 class VectorSearchRequest(BaseModel):
     """Request model for vector search."""
@@ -124,10 +127,10 @@ class VectorSearchService:
         # Build the query
         query = {
             "knn": {
-                "field": "summary_vector",
+                "field": VECTOR_FIELD,
                 "query_vector": query_vector,
                 "k": k,
-                "num_candidates": k * 10
+                "num_candidates": min(k * 10, 10_000)
             },
             "min_score": min_score
         }
@@ -198,10 +201,10 @@ class VectorSearchService:
         # Add vector search retriever
         knn_retriever = {
             "knn": {
-                "field": "summary_vector",
+                "field": VECTOR_FIELD,
                 "query_vector": query_vector,
                 "k": k,
-                "num_candidates": k * 10
+                "num_candidates": min(k * 10, 10_000)
             }
         }
 
@@ -215,7 +218,14 @@ class VectorSearchService:
         text_query = {
             "multi_match": {
                 "query": query_text,
-                "fields": ["title^2", "summary", "keywords", "topics"],
+                "fields": [
+                    "title^2",
+                    "summary",
+                    "claims_text^2",
+                    CLAIMS_TOP3_FIELD,
+                    "keywords",
+                    "topics"
+                ],
                 "type": "best_fields"
             }
         }
@@ -299,7 +309,14 @@ class VectorSearchService:
         query = {
             "multi_match": {
                 "query": query_text,
-                "fields": ["title^2", "summary", "keywords", "topics"],
+                "fields": [
+                    "title^2",
+                    "summary",
+                    "claims_text^2",
+                    CLAIMS_TOP3_FIELD,
+                    "keywords",
+                    "topics"
+                ],
                 "type": "best_fields"
             }
         }
@@ -357,7 +374,14 @@ class VectorSearchService:
         should_clauses = [{
             "multi_match": {
                 "query": query_text,
-                "fields": ["title^2", "summary", "keywords", "topics"],
+                "fields": [
+                    "title^2",
+                    "summary",
+                    "claims_text^2",
+                    CLAIMS_TOP3_FIELD,
+                    "keywords",
+                    "topics"
+                ],
                 "type": "best_fields",
                 "boost": 0.3
             }
@@ -377,10 +401,10 @@ class VectorSearchService:
 
         if query_vector:
             query_body["knn"] = {
-                "field": "summary_vector",
+                "field": VECTOR_FIELD,
                 "query_vector": query_vector,
                 "k": k,
-                "num_candidates": k * 10,
+                "num_candidates": min(k * 10, 10_000),
                 "boost": 0.7
             }
 
@@ -442,21 +466,21 @@ class VectorSearchService:
             source = doc_response["_source"]
 
             # Check if document has a vector
-            if "summary_vector" not in source:
+            if VECTOR_FIELD not in source:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Patent {patent_id} does not have an embedding vector"
                 )
 
-            query_vector = source["summary_vector"]
+            query_vector = source[VECTOR_FIELD]
 
             # Search for similar documents (excluding the source document)
             query = {
                 "knn": {
-                    "field": "summary_vector",
+                    "field": VECTOR_FIELD,
                     "query_vector": query_vector,
                     "k": k + 1,  # Get one extra to exclude the source
-                    "num_candidates": (k + 1) * 10
+                    "num_candidates": min((k + 1) * 10, 10_000)
                 },
                 "min_score": min_score,
                 "query": {

@@ -16,6 +16,8 @@ from openai import AzureOpenAI
 # 環境変数の読み込み
 load_dotenv()
 
+VECTOR_FIELD = os.getenv("ES_VECTOR_FIELD", "claims_vector")
+
 
 class FilteredVectorEvaluator:
     def __init__(self):
@@ -72,7 +74,7 @@ class FilteredVectorEvaluator:
                 "script_score": {
                     "query": {"match_all": {}},
                     "script": {
-                        "source": "cosineSimilarity(params.query_vector, 'summary_vector') + 1.0",
+                        "source": f"cosineSimilarity(params.query_vector, '{VECTOR_FIELD}') + 1.0",
                         "params": {
                             "query_vector": query_embedding
                         }

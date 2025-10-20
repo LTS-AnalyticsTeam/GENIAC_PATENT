@@ -4,19 +4,21 @@ Azure OpenAI Embedding Processor with Batch Support
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from azure.core.credentials import AzureKeyCredential
-from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 
 from .utils.rate_limiter import BatchRateLimiter
 from .utils.token_counter import TokenCounter
+from .utils.text_extractor import extract_claims1_text, extract_summary_text
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+SUMMARY_VECTOR_FIELD = os.getenv("ES_SUMMARY_VECTOR_FIELD", "summary_vector")
+CLAIMS1_VECTOR_FIELD = os.getenv("ES_CLAIMS1_VECTOR_FIELD", "claims1_vector")
 
 
 class EmbeddingProcessor:
@@ -41,6 +43,8 @@ class EmbeddingProcessor:
         )
 
         self.model = self.deployment  # Use deployment name as model
+        self.summary_vector_field = SUMMARY_VECTOR_FIELD
+        self.claims1_vector_field = CLAIMS1_VECTOR_FIELD
 
         # Rate limiting configuration
         max_tokens_per_min = int(os.getenv("OPENAI_MAX_TOKENS_PER_MIN", "1000000"))
@@ -182,25 +186,47 @@ class EmbeddingProcessor:
             logger.info(f"Processing batch {batch_idx + 1}/{len(doc_batches)} "
                        f"with {len(batch)} documents")
 
-            # Extract summaries for embedding
-            summaries = [doc.get("summary", "") for doc in batch]
+            # Extract text for embedding
+            summary_texts = [extract_summary_text(doc) for doc in batch]
+            claims_texts = [extract_claims1_text(doc) for doc in batch]
 
-            # Generate embeddings for the batch
-            embeddings = await self.generate_batch_embeddings(summaries)
+            # Generate embeddings for summaryと請求項1
+            summary_embeddings = await self.generate_batch_embeddings(summary_texts)
+            claims_embeddings = await self.generate_batch_embeddings(claims_texts)
 
             # Add embeddings to documents
-            for doc, embedding in zip(batch, embeddings):
-                if embedding:
-                    doc["summary_vector"] = embedding
-                    doc["embedding_model"] = self.model
-                    doc["embedding_generated"] = True
+            for doc, summary_embedding, claims_embedding in zip(batch, summary_embeddings, claims_embeddings):
+                summary_generated = bool(summary_embedding)
+                claims_generated = bool(claims_embedding)
+
+                if summary_generated:
+                    doc[self.summary_vector_field] = summary_embedding
+                else:
+                    doc.pop(self.summary_vector_field, None)
+
+                if claims_generated:
+                    doc[self.claims1_vector_field] = claims_embedding
+                else:
+                    doc.pop(self.claims1_vector_field, None)
+
+                doc["embedding_model"] = self.model
+                doc["embedding_generated_summary"] = summary_generated
+                doc["embedding_generated_claims1"] = claims_generated
+                doc["embedding_generated"] = summary_generated and claims_generated
+
+                if doc["embedding_generated"]:
                     self.total_processed += 1
                 else:
-                    doc["embedding_generated"] = False
                     self.total_failed += 1
                     self.failed_documents.append(doc.get("patent_id", "unknown"))
-                    logger.error(f"Failed to generate embedding for document: "
-                                f"{doc.get('patent_id', 'unknown')}")
+                    if not summary_generated or not claims_generated:
+                        logger.warning(
+                            "Partial embedding generation failure for document %s "
+                            "(summary=%s, claims1=%s)",
+                            doc.get("patent_id", "unknown"),
+                            "ok" if summary_generated else "missing",
+                            "ok" if claims_generated else "missing",
+                        )
 
                 processed_documents.append(doc)
 
@@ -234,16 +260,30 @@ class EmbeddingProcessor:
         # Process batches in parallel
         async def process_batch(batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             """Process a single batch of documents."""
-            summaries = [doc.get("summary", "") for doc in batch]
-            embeddings = await self.generate_batch_embeddings(summaries)
+            summary_texts = [extract_summary_text(doc) for doc in batch]
+            claims_texts = [extract_claims1_text(doc) for doc in batch]
 
-            for doc, embedding in zip(batch, embeddings):
-                if embedding:
-                    doc["summary_vector"] = embedding
-                    doc["embedding_model"] = self.model
-                    doc["embedding_generated"] = True
+            summary_embeddings = await self.generate_batch_embeddings(summary_texts)
+            claims_embeddings = await self.generate_batch_embeddings(claims_texts)
+
+            for doc, summary_embedding, claims_embedding in zip(batch, summary_embeddings, claims_embeddings):
+                summary_generated = bool(summary_embedding)
+                claims_generated = bool(claims_embedding)
+
+                if summary_generated:
+                    doc[self.summary_vector_field] = summary_embedding
                 else:
-                    doc["embedding_generated"] = False
+                    doc.pop(self.summary_vector_field, None)
+
+                if claims_generated:
+                    doc[self.claims1_vector_field] = claims_embedding
+                else:
+                    doc.pop(self.claims1_vector_field, None)
+
+                doc["embedding_model"] = self.model
+                doc["embedding_generated_summary"] = summary_generated
+                doc["embedding_generated_claims1"] = claims_generated
+                doc["embedding_generated"] = summary_generated and claims_generated
 
             return batch
 
@@ -279,6 +319,13 @@ class EmbeddingProcessor:
             else:
                 self.total_failed += 1
                 self.failed_documents.append(doc.get("patent_id", "unknown"))
+                logger.warning(
+                    "Partial embedding generation failure for document %s "
+                    "(summary=%s, claims1=%s)",
+                    doc.get("patent_id", "unknown"),
+                    "ok" if doc.get("embedding_generated_summary") else "missing",
+                    "ok" if doc.get("embedding_generated_claims1") else "missing",
+                )
 
         return processed_documents
 
@@ -332,8 +379,12 @@ async def main():
     # Check results
     for doc in processed:
         if doc.get("embedding_generated"):
-            print(f"Document {doc['patent_id']}: Embedding generated "
-                  f"(dimension: {len(doc['summary_vector'])})")
+            summary_vec = doc.get(processor.summary_vector_field, [])
+            claims_vec = doc.get(processor.claims1_vector_field, [])
+            print(
+                f"Document {doc['patent_id']}: summary_vec={len(summary_vec)} dims, "
+                f"claims1_vec={len(claims_vec)} dims"
+            )
         else:
             print(f"Document {doc['patent_id']}: Failed to generate embedding")
 

@@ -2,11 +2,14 @@
 Token counting utility for OpenAI API rate limiting
 """
 import logging
+import os
 from typing import Any, Dict, List
 
 import tiktoken
 
 logger = logging.getLogger(__name__)
+
+from .text_extractor import extract_claims1_text, extract_summary_text
 
 
 class TokenCounter:
@@ -78,14 +81,9 @@ class TokenCounter:
         Returns:
             Estimated number of tokens
         """
-        # Count tokens in the summary (main field for embedding)
-        summary_tokens = self.count_tokens(document.get("summary", ""))
-
-        # If we need to embed other fields in the future
-        # title_tokens = self.count_tokens(document.get("title", ""))
-        # description_tokens = self.count_tokens(document.get("description", ""))
-
-        return summary_tokens
+        summary_text = extract_summary_text(document)
+        claims1_text = extract_claims1_text(document)
+        return self.count_tokens(summary_text) + self.count_tokens(claims1_text)
 
     def split_texts_by_token_limit(
         self,
@@ -206,7 +204,6 @@ class TokenCounter:
 
         logger.info(f"Split {len(documents)} documents into {len(batches)} batches")
         return batches
-
 
 # Example usage
 if __name__ == "__main__":

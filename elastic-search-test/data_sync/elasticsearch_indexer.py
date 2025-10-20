@@ -25,6 +25,17 @@ class ElasticsearchIndexer:
         self.batch_size = int(os.getenv("ELASTICSEARCH_BATCH_SIZE", "100"))
         self.request_timeout = int(os.getenv("ELASTICSEARCH_REQUEST_TIMEOUT", "120"))  # Increased from 30 to 120 seconds
         self.index_creation_timeout = int(os.getenv("ELASTICSEARCH_INDEX_CREATION_TIMEOUT", "300"))  # 5 minutes for index creation
+        self.summary_vector_field = os.getenv("ES_SUMMARY_VECTOR_FIELD", "summary_vector")
+        self.claims1_vector_field = os.getenv("ES_CLAIMS1_VECTOR_FIELD", "claims1_vector")
+        legacy_vector_field = os.getenv("ES_VECTOR_FIELD")
+        # Preserve legacy attribute for compatibility, defaulting to summary vector.
+        self.vector_field = legacy_vector_field or self.summary_vector_field
+        self.vector_dims = int(os.getenv("ES_VECTOR_DIMS", "3072"))
+        self.claims_top3_field = os.getenv("ES_CLAIMS_TOP3_FIELD", "claims_top3_text")
+        self.summary_vector_weight = float(os.getenv("ES_SUMMARY_VECTOR_WEIGHT", "0.6"))
+        self.claims_vector_weight = float(os.getenv("ES_CLAIMS_VECTOR_WEIGHT", "0.4"))
+        self.min_vector_score = float(os.getenv("ES_MIN_VECTOR_SCORE", "0.4"))
+        self.max_num_candidates = int(os.getenv("ES_MAX_NUM_CANDIDATES", "10000"))
 
         # Initialize Elasticsearch client
         self.es = Elasticsearch(
@@ -89,11 +100,30 @@ class ElasticsearchIndexer:
                     "summary": {
                         "type": "text"
                     },
+                    "claims": {
+                        "type": "object",
+                        "properties": {
+                            "num": {"type": "keyword"},
+                            "text": {"type": "text"}
+                        }
+                    },
+                    "claims_text": {
+                        "type": "text"
+                    },
+                    self.claims_top3_field: {
+                        "type": "text"
+                    },
 
-                    # Vector field for similarity search
-                    "summary_vector": {
+                    # Vector fields for similarity search
+                    self.summary_vector_field: {
                         "type": "dense_vector",
-                        "dims": 3072,  # text-embedding-3-large dimension
+                        "dims": self.vector_dims,
+                        "index": True,
+                        "similarity": "cosine"
+                    },
+                    self.claims1_vector_field: {
+                        "type": "dense_vector",
+                        "dims": self.vector_dims,
                         "index": True,
                         "similarity": "cosine"
                     },
@@ -260,8 +290,13 @@ class ElasticsearchIndexer:
         skipped_no_embedding = 0
 
         for doc in documents:
-            if not doc.get("summary_vector") and doc.get("embedding_generated") is False:
-                logger.warning(f"Skipping document without embedding: {doc.get('patent_id')}")
+            has_summary_vec = bool(doc.get(self.summary_vector_field))
+            has_claims_vec = bool(doc.get(self.claims1_vector_field))
+            if not (has_summary_vec or has_claims_vec):
+                logger.warning(
+                    "Skipping document without embeddings (summary/claims1 missing): %s",
+                    doc.get("patent_id"),
+                )
                 skipped_no_embedding += 1
                 continue
             valid_documents.append(doc)
@@ -395,7 +430,8 @@ class ElasticsearchIndexer:
         query_vector: List[float],
         k: int = 10,
         min_score: float = 0.7,
-        filters: Optional[Dict[str, Any]] = None
+        filters: Optional[Dict[str, Any]] = None,
+        vector_field: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search for similar documents using vector similarity.
@@ -405,17 +441,20 @@ class ElasticsearchIndexer:
             k: Number of results to return
             min_score: Minimum similarity score
             filters: Additional filters to apply
+            vector_field: Target vector field (default: summary vector)
 
         Returns:
             List of similar documents
         """
+        target_field = vector_field or self.summary_vector_field
+
         # Build the query
         query = {
             "knn": {
-                "field": "summary_vector",
+                "field": target_field,
                 "query_vector": query_vector,
                 "k": k,
-                "num_candidates": k * 10
+                "num_candidates": min(k * 10, self.max_num_candidates)
             },
             "min_score": min_score
         }
@@ -439,8 +478,9 @@ class ElasticsearchIndexer:
                 result["_score"] = hit["_score"]
                 result["_id"] = hit["_id"]
 
-                # Remove vector from result to reduce size
-                result.pop("summary_vector", None)
+                # Remove vector fields from result to reduce size
+                result.pop(self.summary_vector_field, None)
+                result.pop(self.claims1_vector_field, None)
 
                 results.append(result)
 
@@ -455,8 +495,10 @@ class ElasticsearchIndexer:
         query_text: str,
         query_vector: Optional[List[float]] = None,
         k: int = 10,
-        text_weight: float = 0.3,
-        vector_weight: float = 0.7
+        text_weight: float = 0.4,
+        vector_weight: float = 0.6,
+        min_score: float = 0.0,
+        vector_field: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search combining text and vector search.
@@ -471,19 +513,32 @@ class ElasticsearchIndexer:
         Returns:
             List of search results
         """
+        target_field = vector_field or self.summary_vector_field
+
         # Build query
         should_clauses = []
 
-        # Add text search
+        # Add text search weighting multiple fields to better capture domain terms
         if query_text:
-            should_clauses.append({
-                "multi_match": {
-                    "query": query_text,
-                    "fields": ["title^2", "summary"],
-                    "type": "best_fields",
-                    "boost": text_weight
+            should_clauses.append(
+                {
+                    "multi_match": {
+                        "query": query_text,
+                        "fields": [
+                            "title^3",
+                            "summary^2",
+                            "claims_text^3",
+                            "keywords^2",
+                            "classification_fi",
+                            "f_term",
+                            "topics",
+                        ],
+                        "type": "best_fields",
+                        "boost": text_weight,
+                        "operator": "and",
+                    }
                 }
-            })
+            )
 
         # Build the main query
         query_body = {
@@ -492,17 +547,18 @@ class ElasticsearchIndexer:
                     "should": should_clauses
                 }
             },
-            "size": k
+            "size": k,
+            "min_score": min_score,
         }
 
         # Add vector search if vector is provided
         if query_vector:
             query_body["knn"] = {
-                "field": "summary_vector",
+                "field": target_field,
                 "query_vector": query_vector,
                 "k": k,
-                "num_candidates": k * 10,
-                "boost": vector_weight
+                "num_candidates": min(k * 10, self.max_num_candidates),
+                "boost": vector_weight,
             }
 
         # Execute search
@@ -512,23 +568,167 @@ class ElasticsearchIndexer:
                 body=query_body
             )
 
-            # Extract results
-            results = []
+            # Extract results with metadata
+            results: List[Dict[str, Any]] = []
             for hit in response["hits"]["hits"]:
-                result = hit["_source"]
-                result["_score"] = hit["_score"]
-                result["_id"] = hit["_id"]
-
-                # Remove vector from result
-                result.pop("summary_vector", None)
-
-                results.append(result)
+                source = dict(hit["_source"])
+                source.pop(self.summary_vector_field, None)
+                source.pop(self.claims1_vector_field, None)
+                results.append(
+                    {
+                        "patent_id": hit["_id"],
+                        "_score": hit["_score"],
+                        "_vector_field": target_field,
+                        "document": source,
+                    }
+                )
 
             return results
 
         except Exception as e:
             logger.error(f"Error in hybrid search: {e}")
             return []
+
+    def dual_vector_search(
+        self,
+        query_vector: List[float],
+        k: int = 10,
+        summary_weight: Optional[float] = None,
+        claims_weight: Optional[float] = None,
+        min_score: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run separate KNN searches against summary/claims vectors and merge the results.
+
+        Args:
+            query_vector: Embedding vector for the query
+            k: Maximum number of combined results to return
+            summary_weight: Weight applied to the summary score (defaults to env)
+            claims_weight: Weight applied to the claims score (defaults to env)
+            min_score: Minimum cosine similarity threshold per vector search
+
+        Returns:
+            Dict containing combined hits and hit counts per vector field
+        """
+        summary_weight = summary_weight if summary_weight is not None else self.summary_vector_weight
+        claims_weight = claims_weight if claims_weight is not None else self.claims_vector_weight
+        min_score = min_score if min_score is not None else self.min_vector_score
+
+        def _run_knn(field_name: str) -> List[Dict[str, Any]]:
+            """Execute a KNN search for the provided field."""
+            body = {
+                "knn": {
+                    "field": field_name,
+                    "query_vector": query_vector,
+                    "k": k,
+                    "num_candidates": min(k * 10, self.max_num_candidates),
+                },
+                "min_score": min_score,
+            }
+            response = self.es.search(
+                index=self.index_name,
+                body=body,
+                size=k,
+            )
+            return response["hits"]["hits"]
+
+        def _clean_source(source: Dict[str, Any]) -> Dict[str, Any]:
+            """Remove heavy vector payloads from the source."""
+            cleaned = dict(source)
+            cleaned.pop(self.summary_vector_field, None)
+            cleaned.pop(self.claims1_vector_field, None)
+            return cleaned
+
+        try:
+            summary_hits = _run_knn(self.summary_vector_field)
+            claims_hits = _run_knn(self.claims1_vector_field)
+        except Exception as exc:
+            logger.error(f"Error executing dual vector search: {exc}")
+            return {
+                "combined_hits": [],
+                "summary_hits_count": 0,
+                "claims_hits_count": 0,
+                "error": str(exc),
+            }
+
+        combined: Dict[str, Dict[str, Any]] = {}
+
+        # Merge summary hits
+        for rank, hit in enumerate(summary_hits, start=1):
+            doc_id = hit["_id"]
+            score = hit["_score"]
+            entry = combined.setdefault(
+                doc_id,
+                {
+                    "patent_id": doc_id,
+                    "combined_score": 0.0,
+                    "summary_score": None,
+                    "claims_score": None,
+                    "summary_rank": None,
+                    "claims_rank": None,
+                    "document": _clean_source(hit["_source"]),
+                    "sources": [],
+                },
+            )
+            entry["summary_score"] = score
+            entry["summary_rank"] = rank
+            entry["combined_score"] += summary_weight * score
+            entry["sources"].append(
+                {
+                    "vector_field": self.summary_vector_field,
+                    "rank": rank,
+                    "score": score,
+                    "weight": summary_weight,
+                    "weighted_score": summary_weight * score,
+                }
+            )
+
+        # Merge claims hits
+        for rank, hit in enumerate(claims_hits, start=1):
+            doc_id = hit["_id"]
+            score = hit["_score"]
+            entry = combined.setdefault(
+                doc_id,
+                {
+                    "patent_id": doc_id,
+                    "combined_score": 0.0,
+                    "summary_score": None,
+                    "claims_score": None,
+                    "summary_rank": None,
+                    "claims_rank": None,
+                    "document": _clean_source(hit["_source"]),
+                    "sources": [],
+                },
+            )
+            entry["claims_score"] = score
+            entry["claims_rank"] = rank
+            entry["combined_score"] += claims_weight * score
+            if "document" not in entry or not entry["document"]:
+                entry["document"] = _clean_source(hit["_source"])
+            entry["sources"].append(
+                {
+                    "vector_field": self.claims1_vector_field,
+                    "rank": rank,
+                    "score": score,
+                    "weight": claims_weight,
+                    "weighted_score": claims_weight * score,
+                }
+            )
+
+        combined_hits = sorted(
+            combined.values(),
+            key=lambda item: (
+                -float(item.get("combined_score", 0.0)),
+                -float(item.get("summary_score") or 0.0),
+                -float(item.get("claims_score") or 0.0),
+            ),
+        )[:k]
+
+        return {
+            "combined_hits": combined_hits,
+            "summary_hits_count": len(summary_hits),
+            "claims_hits_count": len(claims_hits),
+        }
 
     def get_document_by_id(self, patent_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -754,7 +954,7 @@ if __name__ == "__main__":
         "patent_id": "2010000001",
         "title": "バリカン式刈刃装置",
         "summary": "本発明は、バリカン式の刈刃装置に関する。",
-        "summary_vector": [0.1] * 3072,  # Dummy vector
+        indexer.vector_field: [0.1] * indexer.vector_dims,  # Dummy vector
         "filing_date": "20080611",
         "publication_date": "20100107",
         "classification_ipc": ["A61B8/00"],

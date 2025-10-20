@@ -4,7 +4,7 @@ Cosmos DB Client for Patent Data Retrieval
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from azure.cosmos import CosmosClient, exceptions
 from dotenv import load_dotenv
@@ -215,6 +215,49 @@ class CosmosDBClient:
             logger.error(f"Error retrieving documents for incremental sync: {e}")
             raise
 
+    @staticmethod
+    def _safe_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return ""
+        return str(value)
+
+    @classmethod
+    def _normalize_claims(cls, raw_claims: Any) -> Tuple[List[Dict[str, str]], str]:
+        claims_list: List[Dict[str, str]] = []
+
+        if not raw_claims:
+            return claims_list, ""
+
+        if isinstance(raw_claims, dict):
+            iterable = [raw_claims]
+        elif isinstance(raw_claims, list):
+            iterable = raw_claims
+        else:
+            iterable = [raw_claims]
+
+        for entry in iterable:
+            num = ""
+            text = ""
+
+            if isinstance(entry, dict):
+                num = cls._safe_text(entry.get("num", "")).strip()
+                text = cls._safe_text(entry.get("text", "")).strip()
+                if not text:
+                    # fallback to alternative keys that sometimes store claim text
+                    text = cls._safe_text(entry.get("claim_text", "")).strip()
+            elif isinstance(entry, str):
+                text = entry.strip()
+            else:
+                text = cls._safe_text(entry).strip()
+
+            if text:
+                claims_list.append({"num": num, "text": text})
+
+        claims_text = "\n".join(claim["text"] for claim in claims_list if claim["text"])
+        return claims_list, claims_text
+
     def _extract_document_fields(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract and structure relevant fields from a Cosmos DB document.
@@ -227,6 +270,18 @@ class CosmosDBClient:
         """
         # Extract metadata
         metadata = item.get("metadata", {})
+
+        # Normalize claims content
+        claims_list, claims_text = self._normalize_claims(item.get("claims", []))
+        claims_top3_text = "\n".join(
+            claim.get("text", "")
+            for claim in claims_list[:3]
+            if claim.get("text")
+        )
+        if claims_list:
+            number_of_claims = str(len(claims_list))
+        else:
+            number_of_claims = self._safe_text(item.get("number_of_claims", "0"))
 
         # Build the document structure for Elasticsearch
         document = {
@@ -260,8 +315,10 @@ class CosmosDBClient:
 
             # Additional fields
             "priority_date": item.get("priority_date", ""),
-            "number_of_claims": item.get("number_of_claims", "0"),
-            "claims": item.get("claims", []),
+            "number_of_claims": number_of_claims,
+            "claims": claims_list,
+            "claims_text": claims_text,
+            "claims_top3_text": claims_top3_text,
             "applicants": item.get("applicants", []),
             "inventors": item.get("inventors", []),
             "country": item.get("country", "JP"),

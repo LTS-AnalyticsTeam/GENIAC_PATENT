@@ -20,6 +20,8 @@ from openpyxl.utils import get_column_letter
 # Load environment variables
 load_dotenv()
 
+VECTOR_FIELD = os.getenv("ES_VECTOR_FIELD", "claims_vector")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -185,7 +187,7 @@ class PatentVectorEvaluator:
         try:
             query = {
                 "knn": {
-                    "field": "summary_vector",
+                    "field": VECTOR_FIELD,
                     "query_vector": query_vector,
                     "k": min(k, 100),  # Limit to 100 for performance
                     "num_candidates": min(k * 10, 1000)
@@ -245,7 +247,7 @@ class PatentVectorEvaluator:
                     }
                 },
                 "knn": {
-                    "field": "summary_vector",
+                    "field": VECTOR_FIELD,
                     "query_vector": query_vector,
                     "k": min(k, 100),
                     "num_candidates": min(k * 10, 1000),

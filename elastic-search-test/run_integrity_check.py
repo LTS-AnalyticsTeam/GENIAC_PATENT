@@ -4,12 +4,13 @@
 Cosmos DB と Elasticsearch 間のデータ整合性を詳細に検証します
 """
 import asyncio
-import json
 import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
+import json
+import os
 
 # パスを追加
 sys.path.append(str(Path(__file__).parent))
@@ -27,6 +28,8 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+VECTOR_FIELD = os.getenv("ES_VECTOR_FIELD", "claims_vector")
 
 
 class IntegrityChecker:
@@ -214,8 +217,8 @@ class IntegrityChecker:
                 errors.append(f"{field}: Cosmos='{cosmos_value}' != ES='{es_value}'")
 
         # エンベディングの存在確認
-        if not es_doc.get("summary_vector"):
-            errors.append("summary_vector: エンベディングが存在しません")
+        if not es_doc.get(VECTOR_FIELD):
+            errors.append(f"{VECTOR_FIELD}: エンベディングが存在しません")
 
         return {
             "valid": len(errors) == 0,
