@@ -1,0 +1,38 @@
+version: "3.8"
+services:
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: neo4j
+    # ローカルのみ公開
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/neo4jpass
+      NEO4J_server_memory_heap_max__size: 4G
+      NEO4J_dbms_security_auth__enabled: "true"
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.coll.*,apoc.convert.*"
+    volumes:
+      - ./data/neo4j:/data
+      - ./data/import:/var/lib/neo4j/import
+
+  es:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    # ローカルのみ公開
+    ports:
+      - "127.0.0.1:9200:9200"
+      - "127.0.0.1:9300:9300"
+    volumes:
+      - ./data/es:/usr/share/elasticsearch/data

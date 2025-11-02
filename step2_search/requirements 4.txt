@@ -1,0 +1,16 @@
+numpy
+scipy
+pandas
+scikit-learn
+tqdm
+requests
+elasticsearch==8.13.1
+py2neo==2021.2.4
+sudachipy==0.6.8
+sudachidict_core==20240109
+# 依存関係解析を入れる場合（任意・事前DL要）
+spacy==3.7.4
+ja-ginza==5.2.0
+openai>=1.40.0
+neo4j>=5.22.0
+python-dotenv>=1.0.1
