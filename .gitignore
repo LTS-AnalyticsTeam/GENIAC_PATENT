@@ -15,6 +15,7 @@ pnpm-debug.log*
 # Python caches and virtual environments
 __pycache__/
 *.py[cod]
+*.pyc
 *.pyo
 *.pyd
 *.so
@@ -31,12 +32,17 @@ backend/.venv/
 
 # Environment and secrets
 .env
+elastic-search-test/.env
+!elastic-search-test/.env.example
 *.env
 
 # Ancillary projects and datasets (keep repo focused on frontend/backend)
 F-TERM/
+F-TERM/data/
+F-TERM/output/
 FI/
+FI/data/
+FI/output/
 azure-batch-extract-data/
 convert_xml_to_json/
-elastic-search-test/
 samples/

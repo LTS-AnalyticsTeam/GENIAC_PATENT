@@ -1,1 +1,0 @@
-# GENIAC_PATENT

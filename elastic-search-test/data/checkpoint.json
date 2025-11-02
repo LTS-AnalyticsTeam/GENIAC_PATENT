@@ -1,0 +1,34 @@
+{
+  "batch_num": 397,
+  "completed": true,
+  "timestamp": "2025-10-05T13:23:04.127163",
+  "stats": {
+    "start_time": "2025-10-05 11:53:31.082254",
+    "end_time": "2025-10-05 13:22:59.657681",
+    "total_documents": 39680,
+    "documents_processed": 39680,
+    "documents_indexed": 39647,
+    "documents_failed": 0,
+    "embeddings_generated": 39647,
+    "embeddings_failed": 33,
+    "errors": []
+  },
+  "validation_results": {
+    "cosmos_total": 39680,
+    "elasticsearch_total": 39647,
+    "count_match": false,
+    "missing_documents": [],
+    "sample_validation": {
+      "checked": 100,
+      "valid": 100,
+      "invalid": 0
+    }
+  },
+  "checkpoint_version": "2.0",
+  "saved_at": "2025-10-05T13:23:04.127229",
+  "process_id": 23718,
+  "validation": {
+    "documents_processed_valid": true,
+    "no_negative_counts": true
+  }
+}
