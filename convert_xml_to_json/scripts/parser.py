@@ -35,6 +35,38 @@ def parse_ipc_entry(ipc_str):
     # fallback: 空白除去
     return {'code': s.replace(' ', ''), 'raw': ipc_str.strip()}
 
+def extract_ipc_prefix(ipc_str):
+    """
+    IPCコードからプレフィックスを抽出する
+    例: "B41J 2/055 20060101AFI20131004BHJP" -> "B41J2"
+    例: "C07H 5/06" -> "C07H5"
+    """
+    s = ipc_str.strip().upper()
+    # "/"で分割して前半部分を取得
+    if "/" in s:
+        s = s.split("/", 1)[0]
+    # 空白を除去して正規化
+    s = re.sub(r"\s+", "", s)
+    # 最初の5文字を取得（セクション+クラス+サブクラス）
+    # 例: B41J2, C07H5, A61P3
+    if len(s) >= 5:
+        return s[:5]
+    elif len(s) >= 4:
+        return s[:4]
+    return s if s else None
+
+def extract_ipc_prefixes(classification_ipc):
+    """
+    classification_ipcリストからipc_prefixリストを生成する
+    """
+    prefixes = []
+    for ipc_entry in classification_ipc:
+        raw = ipc_entry.get('raw', '') if isinstance(ipc_entry, dict) else str(ipc_entry)
+        prefix = extract_ipc_prefix(raw)
+        if prefix and prefix not in prefixes:
+            prefixes.append(prefix)
+    return prefixes
+
 def parse_patent_xml(xml_path):
     with open(xml_path, 'r', encoding='utf-8') as f:
         xml_content = f.read()
@@ -107,6 +139,9 @@ def parse_new_format(root, xml_path, xml_content):
     raw_ipc = get_all_texts(biblio, './/pat:MainClassification', namespaces=NAMESPACES) + get_all_texts(biblio, './/pat:FurtherClassification', namespaces=NAMESPACES)
     classification_ipc = [parse_ipc_entry(ipc) for ipc in raw_ipc]
 
+    # IPCプレフィックスを抽出（検索用）
+    ipc_prefix = extract_ipc_prefixes(classification_ipc)
+
     # キーワード抽出
     keywords = extract_keywords_keybert_fasttext(summary, topn=10) if summary else []
     topics = extract_topics({'metadata': {'classification_ipc': classification_ipc, 'keywords': keywords}})
@@ -144,6 +179,7 @@ def parse_new_format(root, xml_path, xml_content):
             'publication_date': publication_date,
             'reference': reference_obj,
             'classification_ipc': classification_ipc,
+            'ipc_prefix': ipc_prefix,
             'classification_fi': classification_national,
             'f_term': f_term,
             'theme_code': theme_code,
@@ -214,6 +250,9 @@ def parse_old_format(root, xml_path, xml_content):
     raw_ipc = get_all_texts(biblio, './classification-ipc/main-clsf') + get_all_texts(biblio, './classification-ipc/further-clsf')
     classification_ipc = [parse_ipc_entry(ipc) for ipc in raw_ipc]
 
+    # IPCプレフィックスを抽出（検索用）
+    ipc_prefix = extract_ipc_prefixes(classification_ipc)
+
     # キーワード抽出
     keywords = extract_keywords_keybert_fasttext(summary, topn=10) if summary else []
     topics = extract_topics({'metadata': {'classification_ipc': classification_ipc, 'keywords': keywords}})
@@ -251,6 +290,7 @@ def parse_old_format(root, xml_path, xml_content):
             'publication_date': publication_date,
             'reference': reference_obj,
             'classification_ipc': classification_ipc,
+            'ipc_prefix': ipc_prefix,
             'classification_fi': classification_national,
             'f_term': f_term,
             'theme_code': theme_code,
