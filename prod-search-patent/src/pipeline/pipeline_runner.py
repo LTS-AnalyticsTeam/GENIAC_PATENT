@@ -3,25 +3,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 import time
-from typing import Dict, List
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict, List
 
 from analysis import AnalysisService, PatentWorkItem
 
 from .config import PipelineConfig
 from .cosmos_client import CosmosPatentClient
-from .embedding_service import EmbeddingService
 from .elasticsearch_stage1 import Stage1ElasticsearchIndexer
-from .exceptions import IngestionError, PipelineStageError, JobCancelledError
+from .embedding_service import EmbeddingService
+from .exceptions import IngestionError, JobCancelledError, PipelineStageError
 from .graph_rag import GraphRAGService
 from .job_manager import JobManager, JobState
 from .parsing_service import load_json_document, parse_text_document
+from .patent_search_pipeline import run_patent_search_from_json
 from .query_generation import QueryGenerator
 from .stage2_indexer import Stage2Indexer
 from .trimming import sort_and_trim
-from .patent_search_pipeline import run_patent_search_from_json
 
 logger = logging.getLogger(__name__)
 QUERY_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "query"
@@ -611,6 +611,7 @@ async def run_pipeline(
 
     final_payload = {
         "results": top_results,
+        "keyword_search_results": narrowed_patent_ids,
         "pipeline_stats": {
             "trimmed": len(trimmed_docs),
             "stage1_indexed": success,
@@ -621,6 +622,8 @@ async def run_pipeline(
             "vector_queries": len(generated_queries),
             "analysis_candidates": len(top_results),
             "analysis_completed": 1 if analysis_payload else 0,
+            "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
+            "stage2_keyword_filter_results": len(narrowed_patent_ids),
         },
     }
 
