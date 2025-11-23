@@ -624,6 +624,8 @@ async def run_pipeline(
             "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
             "stage2_keyword_filter_results": len(narrowed_patent_ids),
             "analysis_completed": 1 if analysis_payload else 0,
+            "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
+            "stage2_keyword_filter_results": len(narrowed_patent_ids),
         },
     }
 
