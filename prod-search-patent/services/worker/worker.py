@@ -3,7 +3,14 @@ import logging
 import signal
 import sys
 
-from pipeline import IngestionError, JobManager, PipelineConfig, JobState, run_pipeline
+from pipeline import (
+    IngestionError,
+    JobCancelledError,
+    JobManager,
+    PipelineConfig,
+    JobState,
+    run_pipeline,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,17 +36,25 @@ signal.signal(signal.SIGINT, handle_exit)
 
 async def process_job(job_id: str) -> None:
     payload = job_manager.fetch_payload(job_id)
-    if not payload or "xml" not in payload:
+    if not payload or ("json" not in payload and "text" not in payload):
         logger.error("Job %s payload missing", job_id)
         job_manager.set_state(job_id, JobState(status="failed", detail={"reason": "payload_missing"}))
         return
 
-    xml_bytes = payload["xml"].encode("utf-8")
+    if "json" in payload:
+        input_bytes = payload["json"].encode("utf-8")
+    else:
+        input_bytes = payload["text"].encode("utf-8")
     state = job_manager.get_state(job_id)
+    if job_manager.is_cancelled(job_id) or (state and state.status == "cancelled"):
+        logger.info("Job %s cancelled before processing started", job_id)
+        return
     job_manager.set_state(job_id, JobState(status="processing", detail=state.detail if state else {}))
 
     try:
-        await run_pipeline(config, job_manager, job_id, xml_bytes)
+        await run_pipeline(config, job_manager, job_id, input_bytes)
+    except JobCancelledError:
+        logger.info("Job %s cancelled during processing", job_id)
     except IngestionError as exc:
         logger.warning("Job %s ingestion failure: %s", job_id, exc)
         state = job_manager.get_state(job_id)
@@ -64,6 +79,9 @@ async def worker_loop() -> None:
             await asyncio.sleep(1)
             continue
         job_id = job["job_id"]
+        if job_manager.is_cancelled(job_id):
+            logger.info("Dropping cancelled job %s before processing", job_id)
+            continue
         await process_job(job_id)
 
 

@@ -20,6 +20,18 @@ services:
     networks:
       - ps-net
 
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    container_name: ps-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5601:5601"
+    networks:
+      - ps-net
+
   neo4j:
     image: neo4j:5.20-community
     container_name: ps-neo4j

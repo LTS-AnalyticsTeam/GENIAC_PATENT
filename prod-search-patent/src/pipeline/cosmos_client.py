@@ -11,8 +11,6 @@ from .exceptions import IngestionError, PipelineStageError
 
 logger = logging.getLogger(__name__)
 
-_FULLWIDTH_SPACE = "\u3000"
-
 
 class _CosmosSafeTransport(RequestsTransport):
     """Drop unsupported kwargs the legacy SDK leaks into requests session."""
@@ -20,14 +18,6 @@ class _CosmosSafeTransport(RequestsTransport):
     def send(self, request, *, proxies=None, **kwargs):  # type: ignore[override]
         kwargs.pop("continuation_token", None)
         return super().send(request, proxies=proxies, **kwargs)
-
-
-def _sanitize_prefix(value: str) -> str:
-    return value.upper().replace(" ", "").replace(_FULLWIDTH_SPACE, "")
-
-
-def _cosmos_sanitize(field: str) -> str:
-    return f"REPLACE(REPLACE(UPPER({field}), ' ', ''), '　', '')"
 
 
 class CosmosPatentClient:
@@ -79,71 +69,35 @@ class CosmosPatentClient:
 
         prefixes: List[str] = []
         for code in ipc_codes:
-            sanitized = _sanitize_prefix(code)
-            if sanitized and sanitized not in prefixes:
-                prefixes.append(sanitized)
+            if not code:
+                continue
+            head = code.split("/")[0].strip()
+            if head and head not in prefixes:
+                prefixes.append(head)
 
         if not prefixes:
             raise IngestionError("At least one IPC prefix required", status_code=422)
 
-        prefix_params = [{"name": f"@prefix{i}", "value": prefix} for i, prefix in enumerate(prefixes)]
-
-        def _or_join(expressions: List[str]) -> str:
-            return " OR ".join(expr for expr in expressions if expr) or "false"
-
-        # Conditions for top-level classification_ipc array (strings)
-        top_array_checks = [
-            f"(IS_STRING(ipc) AND STARTSWITH({_cosmos_sanitize('ipc')}, @prefix{i}))"
-            for i in range(len(prefixes))
-        ]
-        top_array_condition = _or_join(top_array_checks)
-
-        # Conditions for bibliographic.classification.ipc array (objects with text)
-        biblio_ipc_checks = [
-            f"(IS_OBJECT(ipc) AND IS_DEFINED(ipc.text) AND IS_STRING(ipc.text) "
-            f"AND STARTSWITH({_cosmos_sanitize('ipc.text')}, @prefix{i}))"
-            for i in range(len(prefixes))
-        ]
-        biblio_ipc_condition = _or_join(biblio_ipc_checks)
-
-        # Conditions for string fields (top-level or national)
-        def _string_field_condition(field: str) -> str:
-            checks = [
-                f"STARTSWITH({_cosmos_sanitize(field)}, @prefix{i})" for i in range(len(prefixes))
-            ]
-            joined = _or_join(checks)
-            return f"(IS_DEFINED({field}) AND IS_STRING({field}) AND ({joined}))"
-
-        string_fields = [
-            "c.classification_ipc",
-            "c.bibliographic.classification.national.main",
-            "c.bibliographic.classification.national.further",
-        ]
-        string_conditions = [_string_field_condition(field) for field in string_fields]
-
-        where_clauses = [
-            f"""(
-                IS_DEFINED(c.classification_ipc) AND IS_ARRAY(c.classification_ipc) AND ARRAY_LENGTH(c.classification_ipc) > 0
-                AND EXISTS(SELECT VALUE 1 FROM ipc IN c.classification_ipc WHERE {top_array_condition})
-            )""",
-            f"""(
-                IS_DEFINED(c.bibliographic.classification.ipc) AND IS_ARRAY(c.bibliographic.classification.ipc) AND ARRAY_LENGTH(c.bibliographic.classification.ipc) > 0
-                AND EXISTS(SELECT VALUE 1 FROM ipc IN c.bibliographic.classification.ipc WHERE {biblio_ipc_condition})
-            )""",
-            *string_conditions,
-        ]
-
-        where_clause = " OR ".join(where_clauses)
+        parameters = [{"name": f"@prefix{i}", "value": prefix} for i, prefix in enumerate(prefixes)]
+        prefix_conditions = [f"STARTSWITH(ipc.text, @prefix{i}, true)" for i in range(len(prefixes))]
+        predicate = " OR ".join(prefix_conditions)
 
         query = f"""
         SELECT VALUE c
         FROM c
-        WHERE {where_clause}
+        WHERE IS_DEFINED(c.bibliographic.classification.ipc)
+          AND ARRAY_LENGTH(c.bibliographic.classification.ipc) > 0
+          AND EXISTS (
+            SELECT VALUE 1
+            FROM ipc IN c.bibliographic.classification.ipc
+            WHERE IS_DEFINED(ipc.text)
+              AND ({predicate})
+          )
         """
 
         iterator = self._container.query_items(
             query=query,
-            parameters=prefix_params,
+            parameters=parameters,
             enable_cross_partition_query=True,
             max_item_count=limit,
         )
@@ -154,4 +108,38 @@ class CosmosPatentClient:
             if len(results) >= limit:
                 break
 
+        return results
+
+    def fetch_by_patent_ids(self, patent_ids: List[str]) -> Dict[str, Dict]:
+        """指定した patent_id ごとの完全JSONをまとめて取得する。"""
+        if not patent_ids:
+            return {}
+
+        results: Dict[str, Dict] = {}
+        query = """
+        SELECT VALUE c FROM c
+        WHERE (IS_DEFINED(c.patent_id) AND c.patent_id = @lookup)
+           OR (IS_DEFINED(c.id) AND c.id = @lookup)
+           OR (
+                IS_DEFINED(c.bibliographic) AND
+                IS_DEFINED(c.bibliographic.publication) AND
+                IS_DEFINED(c.bibliographic.publication.doc_number) AND
+                c.bibliographic.publication.doc_number = @lookup
+              )
+        """
+        for patent_id in patent_ids:
+            if not patent_id:
+                continue
+            try:
+                iterator = self._container.query_items(
+                    query=query,
+                    parameters=[{"name": "@lookup", "value": patent_id}],
+                    enable_cross_partition_query=True,
+                    max_item_count=1,
+                )
+                for doc in iterator:
+                    results[patent_id] = doc
+                    break
+            except exceptions.CosmosHttpResponseError as exc:  # type: ignore[name-defined]
+                logger.warning("Failed to fetch Cosmos document %s: %s", patent_id, exc)
         return results

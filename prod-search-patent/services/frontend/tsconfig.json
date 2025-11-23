@@ -2,9 +2,10 @@
   "extends": "./tsconfig.node.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "baseUrl": "./src"
+    "baseUrl": "./src",
+    "moduleResolution": "Bundler",
+    "types": ["vite/client", "react-router-dom"]
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
-

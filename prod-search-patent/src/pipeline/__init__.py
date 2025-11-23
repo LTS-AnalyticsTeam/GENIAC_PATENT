@@ -3,7 +3,7 @@
 from .config import PipelineConfig
 from .pipeline_runner import run_pipeline
 from .job_manager import JobManager, JobState
-from .exceptions import IngestionError
+from .exceptions import IngestionError, JobCancelledError
 
 __all__ = [
     "PipelineConfig",
@@ -11,4 +11,5 @@ __all__ = [
     "JobManager",
     "JobState",
     "IngestionError",
+    "JobCancelledError",
 ]

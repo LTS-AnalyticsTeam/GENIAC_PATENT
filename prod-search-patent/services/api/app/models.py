@@ -25,6 +25,9 @@ class GraphResult(BaseModel):
     summary: Optional[str] = None
     classification_ipc: Optional[List[str]] = None
     graph_score: Optional[float] = None
+    analysis_status: Optional[str] = None
+    analysis_error: Optional[str] = None
+    analysis: Optional[Dict[str, Any]] = None
 
 
 class PipelineResultResponse(BaseModel):
@@ -32,3 +35,9 @@ class PipelineResultResponse(BaseModel):
     completed_at: datetime
     results: List[GraphResult]
     pipeline_stats: Dict[str, Any]
+
+
+class JobCancelResponse(BaseModel):
+    job_id: str
+    status: str
+    queue_entries_removed: int = Field(0, description="Number of queued tasks removed")

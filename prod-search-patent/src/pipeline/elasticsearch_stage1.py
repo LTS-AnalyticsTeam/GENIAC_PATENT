@@ -30,8 +30,6 @@ class Stage1ElasticsearchIndexer:
                     "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
                     "summary": {"type": "text"},
                     "claim1": {"type": "text"},
-                    "claims_text": {"type": "text"},
-                    "classification_ipc": {"type": "keyword"},
                     self.config.es_vector_field: {
                         "type": "dense_vector",
                         "dims": self.config.es_vector_dims,
@@ -100,8 +98,6 @@ class Stage1ElasticsearchIndexer:
             "title",
             "summary",
             "claim1",
-            "claims_text",
-            "classification_ipc",
         ]
 
         response = self.client.search(

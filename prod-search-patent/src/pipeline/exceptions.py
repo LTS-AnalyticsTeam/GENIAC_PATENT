@@ -19,3 +19,10 @@ class PipelineStageError(Exception):
         super().__init__(f"[{stage}] {message}")
         self.stage = stage
 
+
+class JobCancelledError(Exception):
+    """Raised when a job cancellation request is observed during processing."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"Job {job_id} cancelled")
+        self.job_id = job_id

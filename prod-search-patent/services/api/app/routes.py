@@ -11,7 +11,7 @@ from neo4j import GraphDatabase
 from pipeline import IngestionError, JobManager, PipelineConfig
 from pipeline.job_manager import JobState
 
-from .models import GraphResult, IngestResponse, JobStatusResponse, PipelineResultResponse
+from .models import GraphResult, IngestResponse, JobCancelResponse, JobStatusResponse, PipelineResultResponse
 from .deps import get_job_manager, get_pipeline_config
 
 router = APIRouter()
@@ -33,20 +33,41 @@ def _initial_job_detail() -> Dict[str, Any]:
     }
 
 
-@router.post("/ingest", response_model=IngestResponse, status_code=202)
-async def ingest_patent(
+@router.post("/ingest-json", response_model=IngestResponse, status_code=202)
+async def ingest_patent_json(
     request: Request,
     file: UploadFile = File(...),
     job_manager: JobManager = Depends(get_job_manager),
     config: PipelineConfig = Depends(get_pipeline_config),
 ) -> IngestResponse:
-    xml_bytes = await file.read()
-    if not xml_bytes:
-        raise HTTPException(status_code=400, detail="Empty XML payload")
+    json_bytes = await file.read()
+    if not json_bytes:
+        raise HTTPException(status_code=400, detail="Empty JSON payload")
 
     initial_detail = _initial_job_detail()
     job_id = job_manager.create_job(JobState(status="queued", detail=initial_detail))
-    job_manager.store_payload(job_id, {"xml": xml_bytes.decode("utf-8")})
+    job_manager.store_payload(job_id, {"json": json_bytes.decode("utf-8")})
+    job_manager.enqueue_job(job_id)
+
+    status_url = str(request.url_for("get_job_status", job_id=job_id))
+    result_url = str(request.url_for("get_job_result", job_id=job_id))
+    return IngestResponse(job_id=job_id, status_url=status_url, result_url=result_url, detail=initial_detail)
+
+
+@router.post("/ingest-text", response_model=IngestResponse, status_code=202)
+async def ingest_patent_text(
+    request: Request,
+    file: UploadFile = File(...),
+    job_manager: JobManager = Depends(get_job_manager),
+    config: PipelineConfig = Depends(get_pipeline_config),
+) -> IngestResponse:
+    text_bytes = await file.read()
+    if not text_bytes:
+        raise HTTPException(status_code=400, detail="Empty text payload")
+
+    initial_detail = _initial_job_detail()
+    job_id = job_manager.create_job(JobState(status="queued", detail=initial_detail))
+    job_manager.store_payload(job_id, {"text": text_bytes.decode("utf-8")})
     job_manager.enqueue_job(job_id)
 
     status_url = str(request.url_for("get_job_status", job_id=job_id))
@@ -79,6 +100,18 @@ def get_result(job_id: str, job_manager: JobManager = Depends(get_job_manager)) 
         results=results,
         pipeline_stats=result_payload.get("pipeline_stats", {}),
     )
+
+
+@router.post("/cancel/{job_id}", response_model=JobCancelResponse, status_code=202)
+def cancel_job(job_id: str, job_manager: JobManager = Depends(get_job_manager)) -> JobCancelResponse:
+    state = job_manager.get_state(job_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if state.status in {"completed", "failed", "cancelled"}:
+        return JobCancelResponse(job_id=job_id, status=state.status, queue_entries_removed=0)
+
+    removed = job_manager.cancel_job(job_id, reason="ユーザー操作によりキャンセルされました")
+    return JobCancelResponse(job_id=job_id, status="cancelled", queue_entries_removed=removed)
 
 
 @router.get("/healthz")
