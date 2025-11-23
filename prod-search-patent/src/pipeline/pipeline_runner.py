@@ -639,6 +639,7 @@ async def run_pipeline(
 
     final_payload = {
         "results": top_results,
+        "keyword_search_results": narrowed_patent_ids,
         "pipeline_stats": {
             "trimmed": len(trimmed_docs),
             "stage1_indexed": success,
@@ -649,6 +650,8 @@ async def run_pipeline(
             "vector_queries": len(generated_queries),
             "analysis_candidates": len(top_results),
             "analysis_completed": len(analysis_map),
+            "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
+            "stage2_keyword_filter_results": len(narrowed_patent_ids),
         },
     }
 
