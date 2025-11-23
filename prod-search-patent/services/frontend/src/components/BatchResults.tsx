@@ -1,7 +1,7 @@
-// frontend/src/components/BatchResults.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronLeft, FileText, AlertCircle, CheckCircle, XCircle } from "lucide-react";
+import { ChevronLeft, FileText, AlertCircle } from "lucide-react";
+import { AnalysisResponse, AssessmentCandidate, ClaimAssessment } from "../types";
 import "./BatchResults.css";
 
 const API_BASE =
@@ -11,42 +11,6 @@ const API_BASE =
 const RESULT_CACHE_PREFIX = "ps-result-cache";
 const buildResultCacheKey = (jobId: string) => `${RESULT_CACHE_PREFIX}:${jobId}`;
 
-type AnalysisPayload = {
-  run_id: string;
-  alpha: {
-    title: string;
-    pub_number: string;
-    claim1: string;
-    claims_rest: string[];
-  };
-  Ax: {
-    doc_id: string;
-    title: string;
-    pub_number: string;
-    year?: number;
-    ipc: string[];
-    score: number;
-    explanation: {
-      summary: string;
-      why_match: string[];
-      examiner_hints: string[];
-    };
-  };
-  Ay: Array<{
-    doc_id: string;
-    title: string;
-    pub_number: string;
-    year?: number;
-    ipc: string[];
-    score: number;
-    explanation: {
-      summary: string;
-      why_match: string[];
-      examiner_hints: string[];
-    };
-  }>;
-};
-
 type GraphResult = {
   patent_id: string;
   title?: string;
@@ -55,7 +19,7 @@ type GraphResult = {
   graph_score?: number;
   analysis_status?: string;
   analysis_error?: string;
-  analysis?: AnalysisPayload;
+  analysis?: AnalysisResponse;
 };
 
 interface PipelineResultResponse {
@@ -69,6 +33,19 @@ interface LocationState {
   batchResult: PipelineResultResponse;
 }
 
+const statusLabel = (value: string | undefined, kind: "novelty" | "inventive") => {
+  const head = kind === "novelty" ? "新規性" : "進歩性";
+  if (value === "denied") return `${head}: 否定（先行例が充足/容易想到）`;
+  if (value === "supported") return `${head}: 支持（差異あり）`;
+  return `${head}: 要検討`;
+};
+
+const statusClass = (value: string | undefined) => {
+  if (value === "denied") return "danger";
+  if (value === "supported") return "success";
+  return "warning";
+};
+
 const BatchResults: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -76,15 +53,13 @@ const BatchResults: React.FC = () => {
   const state = location.state as LocationState | null;
   const stateBatchResult = state?.batchResult;
   const [batchResult, setBatchResult] = useState<PipelineResultResponse | null>(stateBatchResult ?? null);
-  const [activeTab, setActiveTab] = useState(0);
+  const [activeCandidateIdx, setActiveCandidateIdx] = useState(0);
   const [loading, setLoading] = useState(!stateBatchResult);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const jobIdFromQuery = searchParams.get("jobId");
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
+    if (typeof window === "undefined") return;
     if (stateBatchResult) {
       setBatchResult(stateBatchResult);
       setLoading(false);
@@ -136,9 +111,7 @@ const BatchResults: React.FC = () => {
   }, [jobIdFromQuery, stateBatchResult]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
+    if (typeof window === "undefined") return;
     if (batchResult?.job_id) {
       try {
         sessionStorage.setItem(buildResultCacheKey(batchResult.job_id), JSON.stringify(batchResult));
@@ -148,20 +121,22 @@ const BatchResults: React.FC = () => {
     }
   }, [batchResult]);
 
-  useEffect(() => {
-    if (!batchResult) {
-      if (activeTab !== 0) {
-        setActiveTab(0);
-      }
-      return;
-    }
-    if (activeTab >= (batchResult.results?.length ?? 0)) {
-      setActiveTab(0);
-    }
-  }, [batchResult, activeTab]);
-
   const results = batchResult?.results ?? [];
-  const activeResult = useMemo(() => results[activeTab], [results, activeTab]);
+  const activeResult = useMemo(() => results[0], [results]);
+  const analysis = activeResult?.analysis;
+  const claim1Candidates = analysis?.claim1_candidates ?? [];
+  const restCandidates = analysis?.rest_claim_candidates ?? [];
+  const candidateTabs = useMemo(() => {
+    const first = claim1Candidates.map((c) => ({ ...c, _kind: "claim1" as const }));
+    const rest = restCandidates.map((c) => ({ ...c, _kind: "rest" as const }));
+    return [...first, ...rest].slice(0, 10);
+  }, [claim1Candidates, restCandidates]);
+
+  useEffect(() => {
+    if (activeCandidateIdx >= candidateTabs.length) {
+      setActiveCandidateIdx(0);
+    }
+  }, [candidateTabs.length, activeCandidateIdx]);
 
   if (loading && !batchResult) {
     return (
@@ -193,6 +168,156 @@ const BatchResults: React.FC = () => {
     );
   }
 
+  const renderAssessment = (assessment: ClaimAssessment) => (
+    <div key={assessment.claim_no} className="assessment-block">
+      <div className="assessment-header">
+        <span className="badge">{assessment.claim_no === 1 ? "請求項1" : `請求項${assessment.claim_no}`}</span>
+        <span className={`badge ${statusClass(assessment.novelty)}`}>
+          {statusLabel(assessment.novelty, "novelty")}
+        </span>
+        {assessment.inventive_step && (
+          <span className={`badge ${statusClass(assessment.inventive_step)}`}>
+            {statusLabel(assessment.inventive_step, "inventive")}
+          </span>
+        )}
+      </div>
+      {assessment.evidence.length > 0 ? (
+        <>
+          <h5>参照箇所表示</h5>
+          <ul className="evidence-list">
+            {assessment.evidence.map((ev, idx) => (
+              <li key={idx} className="evidence-item">
+                <div className="evidence-pair">
+                  <div className="evidence-col alpha">
+                    <div className="evidence-label">α該当部分</div>
+                    <div className="evidence-text">{ev.alpha_fragment || "記載なし"}</div>
+                  </div>
+                  <div className="evidence-col candidate">
+                    <div className="evidence-label">候補引用</div>
+                    <div className="evidence-text">{ev.candidate_quote || ev.quote || "記載なし"}</div>
+                  </div>
+                </div>
+                <div className="evidence-why">{ev.why}</div>
+                {ev.section && <div className="evidence-meta">出典: {ev.section}</div>}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="muted">エビデンスがありません（要再判定）</p>
+      )}
+      {assessment.examiner_hints.length > 0 && (
+        <div className="examiner-hints">
+          <h5>審査官への示唆</h5>
+          <ul>
+            {assessment.examiner_hints.map((hint, idx) => (
+              <li key={idx}>{hint}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderCandidate = (candidate: AssessmentCandidate & { _kind: "claim1" | "rest" }) => {
+    const label = candidate._kind === "claim1" ? "請求項1 新規性" : "請求項2以降 新規性/進歩性";
+    const assessments = candidate.assessments;
+    const restCombined =
+      candidate._kind === "rest"
+        ? {
+            noveltyLines: assessments.map((a) => ({
+              claimNo: a.claim_no,
+              novelty: a.novelty,
+              inventive: a.inventive_step,
+            })),
+            evidence: assessments.flatMap((a) =>
+              a.evidence.map((ev) => ({ ...ev, claimNo: a.claim_no }))
+            ),
+            hints: assessments.flatMap((a) =>
+              (a.examiner_hints || []).map((h) => `請求項${a.claim_no}: ${h}`)
+            ),
+          }
+        : null;
+    return (
+      <div className="candidate-card" key={candidate.doc_id}>
+        <div className="candidate-header">
+          <div>
+            <div className="badge primary">{label}</div>
+            <h3>{candidate.title}</h3>
+            <div className="candidate-meta">
+              <span>特許番号: {candidate.pub_number ?? "不明"}</span>
+            </div>
+          </div>
+        </div>
+        {candidate.summary && (
+          <div className="candidate-summary">
+            <div className="evidence-label">要約</div>
+            <p>{candidate.summary}</p>
+          </div>
+        )}
+        {candidate._kind === "claim1" ? (
+          assessments.map(renderAssessment)
+        ) : (
+          <div className="assessment-block">
+            <div className="assessment-header">
+              <span className="badge">請求項2以降まとめ</span>
+            </div>
+            <div className="claims-summary-grid">
+              {restCombined?.noveltyLines.map((line) => (
+                <div key={line.claimNo} className="claim-summary-row">
+                  <span className="badge subtle">請求項{line.claimNo}</span>
+                  <span className={`badge ${statusClass(line.novelty)}`}>
+                    {statusLabel(line.novelty, "novelty")}
+                  </span>
+                  {line.inventive && (
+                    <span className={`badge ${statusClass(line.inventive)}`}>
+                      {statusLabel(line.inventive, "inventive")}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {restCombined?.evidence && restCombined.evidence.length > 0 ? (
+              <>
+                <h5>参照箇所表示</h5>
+                <ul className="evidence-list">
+                  {restCombined.evidence.map((ev, idx) => (
+                    <li key={idx} className="evidence-item">
+                      <div className="evidence-pair">
+                        <div className="evidence-col alpha">
+                          <div className="evidence-label">α該当部分</div>
+                          <div className="evidence-text">{ev.alpha_fragment || "記載なし"}</div>
+                        </div>
+                        <div className="evidence-col candidate">
+                          <div className="evidence-label">候補引用</div>
+                          <div className="evidence-text">{ev.candidate_quote || ev.quote || "記載なし"}</div>
+                        </div>
+                      </div>
+                      <div className="evidence-why">{ev.why}</div>
+                      {ev.section && <div className="evidence-meta">出典: {ev.section}</div>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p className="muted">参照箇所表示はありません。</p>
+            )}
+            {restCombined?.hints && restCombined.hints.length > 0 && (
+              <div className="examiner-hints">
+                <h5>審査官への示唆</h5>
+                <ul>
+                  {restCombined.hints.map((hint, idx) => (
+                    <li key={idx}>{hint}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="batch-results-container">
       {/* ヘッダー */}
@@ -203,42 +328,30 @@ const BatchResults: React.FC = () => {
         </button>
         <h1>特許分析結果</h1>
         <div className="batch-summary">
-          <span>ジョブID: {batchResult.job_id}</span>
+          <span>特許ID: {analysis?.alpha.pub_number || "不明"}</span>
+          <span>タイトル: {analysis?.alpha.title || "不明"}</span>
           <span>完了日時: {new Date(batchResult.completed_at).toLocaleString("ja-JP")}</span>
-          <span>結果件数: {results.length}</span>
         </div>
       </div>
 
       {/* タブナビゲーション */}
       <div className="tabs-container">
         <div className="tabs-nav">
-          {results.map((result, index) => (
+          {candidateTabs.map((c, idx) => (
             <button
-              key={result.patent_id}
-              className={`tab-btn ${activeTab === index ? 'active' : ''} ${
-                result.analysis_status === 'failed' ? 'error' : ''
-              }`}
-              onClick={() => setActiveTab(index)}
+              key={`${c._kind}-${c.doc_id}`}
+              className={`tab-btn ${activeCandidateIdx === idx ? "active" : ""}`}
+              onClick={() => setActiveCandidateIdx(idx)}
             >
               <FileText size={16} />
               <span className="tab-title">
-                {(result.title || result.patent_id || `特許 ${index + 1}`)}
-                {result.patent_id && result.title && (
-                  <span className="tab-subtitle">{result.patent_id}</span>
-                )}
+                {c.title}
+                {c.pub_number && <span className="tab-subtitle">{c.pub_number}</span>}
               </span>
-              {result.analysis_status === 'completed' ? (
-                <CheckCircle size={16} className="status-icon success" />
-              ) : result.analysis_status === 'failed' ? (
-                <XCircle size={16} className="status-icon error" />
-              ) : (
-                <AlertCircle size={16} className="status-icon pending" />
-              )}
             </button>
           ))}
         </div>
 
-        {/* タブコンテンツ */}
         <div className="tab-content">
           {activeResult.analysis_status === "failed" ? (
             <div className="error-message">
@@ -248,111 +361,17 @@ const BatchResults: React.FC = () => {
             </div>
           ) : (
             <div className="analysis-content">
-              <div className="patent-info">
-                <h2>{activeResult.title || activeResult.patent_id}</h2>
-                {activeResult.graph_score !== undefined && (
-                  <p className="pub-number">Graph Score: {activeResult.graph_score.toFixed(2)}</p>
-                )}
-              </div>
-
-              <div className="section">
-                <h3>要約</h3>
-                <div className="claim-text">{activeResult.summary ?? "要約情報がありません。"}</div>
-              </div>
-
-              {activeResult.classification_ipc && activeResult.classification_ipc.length > 0 && (
-                <div className="section">
-                  <h3>IPC分類</h3>
-                  <div className="claims-list">
-                    {activeResult.classification_ipc.map((code) => (
-                      <div key={code} className="claim-item">
-                        {code}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {activeResult.analysis ? (
-                <>
-                  <div className="section">
-                    <h3>請求項1</h3>
-                    <div className="claim-text">{activeResult.analysis.alpha.claim1}</div>
-                  </div>
-                  {activeResult.analysis.alpha.claims_rest.length > 0 && (
-                    <div className="section">
-                      <h3>請求項2-5</h3>
-                      <div className="claims-list">
-                        {activeResult.analysis.alpha.claims_rest.map((claim, idx) => (
-                          <div key={idx} className="claim-item">
-                            {claim}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="section novelty-section">
-                    <h3>Ax: 新規性判定（請求項1）</h3>
-                    <div className="prior-art-card">
-                      <div className="card-header">
-                        <span className="doc-number">{activeResult.analysis.Ax.pub_number}</span>
-                        <span className="score">スコア: {activeResult.analysis.Ax.score.toFixed(2)}</span>
-                      </div>
-                      <h4>{activeResult.analysis.Ax.title}</h4>
-                      <div className="explanation">
-                        {activeResult.analysis.Ax.explanation.why_match.map((reason, idx) => (
-                          <div key={idx} className="reason-block">
-                            {reason.split("\n").map((line, lineIdx) => (
-                              <p key={lineIdx}>{line}</p>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {activeResult.analysis.Ay && activeResult.analysis.Ay.length > 0 && (
-                    <div className="section inventive-section">
-                      <h3>Ay: 進歩性判定（請求項2-5）</h3>
-                      {activeResult.analysis.Ay.map((ay, idx) => (
-                        <div key={idx} className="prior-art-card">
-                          <div className="card-header">
-                            <span className="doc-number">{ay.pub_number}</span>
-                            <span className="score">スコア: {ay.score.toFixed(2)}</span>
-                          </div>
-                          <h4>{ay.title}</h4>
-                          <div className="summary">{ay.explanation.summary}</div>
-                          <div className="explanation">
-                            {ay.explanation.why_match.map((reason, reasonIdx) => (
-                              <div key={reasonIdx} className="reason-block">
-                                {reason.split("\n").map((line, lineIdx) => (
-                                  <p key={lineIdx}>{line}</p>
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
+              {analysis && candidateTabs.length > 0 ? (
+                renderCandidate(candidateTabs[activeCandidateIdx])
               ) : (
                 <div className="info-message">
                   <AlertCircle size={32} />
-                  <p>Ax/Ay 解析はまだ完了していません。Graph結果のみ表示しています。</p>
+                  <p>分析結果がまだありません。別のジョブをお試しください。</p>
                 </div>
               )}
             </div>
           )}
         </div>
-      </div>
-
-      {/* フッター統計 */}
-        <div className="results-footer">
-          <div className="stats">
-            <span>処理時刻: {new Date(batchResult.completed_at).toLocaleString("ja-JP")}</span>
-          </div>
       </div>
     </div>
   );
