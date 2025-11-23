@@ -78,6 +78,7 @@ class CosmosPatentClient:
         if not prefixes:
             raise IngestionError("At least one IPC prefix required", status_code=422)
 
+        logger.info("Cosmos query with IPC prefixes: %s (limit=%d)", prefixes[:10], limit)
         parameters = [{"name": f"@prefix{i}", "value": prefix} for i, prefix in enumerate(prefixes)]
         prefix_conditions = [f"STARTSWITH(ipc.text, @prefix{i}, true)" for i in range(len(prefixes))]
         predicate = " OR ".join(prefix_conditions)

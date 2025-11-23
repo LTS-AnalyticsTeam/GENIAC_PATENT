@@ -51,5 +51,6 @@ export type StageDetail = {
   stages?: Record<string, Record<string, string>>;
   completed_stages?: string[];
   candidate_count?: number;
+  narrowed_count?: number;
   [key: string]: unknown;
 };

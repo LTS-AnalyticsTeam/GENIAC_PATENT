@@ -10,7 +10,10 @@ interface StageProgressProps {
   detail?: {
     current_stage?: string;
     stages?: Record<string, Record<string, string>>;
+    narrowed_count?: number;
   };
+  onShowPatentList?: () => void;
+  keywordSearchCount?: number;
 }
 
 const statusColor = (status: StageStatus) => {
@@ -36,7 +39,18 @@ const resolveStatus = (
   return "pending";
 };
 
-const StageProgress = ({ stages, detail }: StageProgressProps) => {
+const getStatusText = (status: StageStatus): string => {
+  switch (status) {
+    case "completed":
+      return "完了";
+    case "in_progress":
+      return "実行中";
+    default:
+      return "待機中";
+  }
+};
+
+const StageProgress = ({ stages, detail, onShowPatentList, keywordSearchCount }: StageProgressProps) => {
   const completedCount = stages.filter(
     (stage) => resolveStatus(stage.id, detail) === "completed"
   ).length;
@@ -59,14 +73,34 @@ const StageProgress = ({ stages, detail }: StageProgressProps) => {
           const className = ["stage-item", statusColor(status)]
             .filter(Boolean)
             .join(" ");
+          const statusText = getStatusText(status);
+
+          // キーワード検索完了時に件数リンクを表示（ジョブ完了後も表示）
+          const isKeywordSearchCompleted = stage.id === "keyword_search" && status === "completed";
+          const narrowedCount = keywordSearchCount ?? detail?.narrowed_count;
+
           return (
             <div key={stage.id} className={className}>
-              <strong>{stage.label}</strong>
-              <small>
-                {status === "completed" && "完了"}
-                {status === "in_progress" && "実行中"}
-                {status === "pending" && "待機中"}
-              </small>
+              <span>
+                {stage.label}{statusText}
+                {isKeywordSearchCompleted && narrowedCount !== undefined && onShowPatentList && (
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onShowPatentList();
+                    }}
+                    style={{
+                      marginLeft: "8px",
+                      color: "#2563eb",
+                      textDecoration: "underline",
+                      fontSize: "12px",
+                    }}
+                  >
+                    ({narrowedCount.toLocaleString()}件)
+                  </a>
+                )}
+              </span>
             </div>
           );
         })}
