@@ -77,7 +77,9 @@ const StageProgress = ({ stages, detail, onShowPatentList, keywordSearchCount }:
 
           // キーワード検索完了時に件数リンクを表示（ジョブ完了後も表示）
           const isKeywordSearchCompleted = stage.id === "keyword_search" && status === "completed";
-          const narrowedCount = keywordSearchCount ?? detail?.narrowed_count;
+          // narrowed_countはdetailトップレベル、またはstages.keyword_search内にある
+          const stageNarrowedCount = (detail?.stages?.keyword_search as Record<string, unknown>)?.narrowed_count as number | undefined;
+          const narrowedCount = keywordSearchCount ?? detail?.narrowed_count ?? stageNarrowedCount;
 
           return (
             <div key={stage.id} className={className}>
