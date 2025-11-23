@@ -123,14 +123,24 @@ AカテゴリーはスキップしてBとCのみ抽出します。
         try:
             # Azure OpenAI Chat Completions API
             # Note: gpt-5-mini does not support temperature parameter (only default 1)
-            response = api_client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that extracts keywords from patent documents. Please output valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=4096
-            )
+            # Note: gpt-5-mini requires max_completion_tokens, gpt-4o uses max_tokens
+            if model_name == "gpt-5-mini":
+                response = api_client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that extracts keywords from patent documents. Please output valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+            else:
+                response = api_client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that extracts keywords from patent documents. Please output valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=4096
+                )
             text = response.choices[0].message.content
 
             # JSONを抽出
