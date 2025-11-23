@@ -1,9 +1,48 @@
+# Editor settings
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Node.js dependencies and logs
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.so
+.Python
+*.egg-info/
+*.log
+env/
+ENV/
+env.bak/
+venv/
+venv.bak/
+.venv/
+backend/.venv/
+
+# Environment and secrets
 .env
 elastic-search-test/.env
 !elastic-search-test/.env.example
-.venv/
-*.pyc
+*.env
+
+# Ancillary projects and datasets (keep repo focused on frontend/backend)
+F-TERM/
 F-TERM/data/
 F-TERM/output/
+FI/
 FI/data/
 FI/output/
+azure-batch-extract-data/
+convert_xml_to_json/
+samples/

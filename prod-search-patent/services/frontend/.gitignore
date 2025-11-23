@@ -1,0 +1,7 @@
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+
+# Generated JS/typing outputs from TypeScript builds
+src/**/*.js
+src/**/*.d.ts

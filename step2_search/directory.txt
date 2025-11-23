@@ -1,0 +1,34 @@
+tree -L 2
+
+.
+├── cache
+│   ├── claims_cache.json
+│   └── embeddings_cache.pkl
+├── data
+│   ├── es
+│   ├── eval
+│   ├── import
+│   ├── neo4j
+│   ├── new
+│   ├── old
+│   ├── preprocessed
+│   └── raw
+├── docker-compose.yml
+├── graphrag
+│   ├── 00_schema.cypher
+│   ├── check
+│   ├── graph_hybrid
+│   ├── novelty_report.json
+│   ├── old
+│   ├── output.log
+│   ├── stopwords.txt
+│   └── top30
+├── requirements.txt
+├── results_2020120885.json
+├── results_JP2020081354A.json
+├── results_JP2020127600A.json
+├── results_JP2020137062A.json
+├── scripts
+│   ├── old
+│   └── preprocess
+└── stage3_2020120885.log
