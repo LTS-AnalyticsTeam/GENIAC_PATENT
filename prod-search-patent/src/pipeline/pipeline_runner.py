@@ -21,6 +21,7 @@ from .parsing_service import load_json_document, parse_text_document
 from .query_generation import QueryGenerator
 from .stage2_indexer import Stage2Indexer
 from .trimming import sort_and_trim
+from .patent_search_pipeline import run_patent_search_from_json
 
 logger = logging.getLogger(__name__)
 QUERY_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "query"
@@ -186,58 +187,133 @@ async def run_pipeline(
     tracker.complete("parsing")
 
     ipc_codes = parsed["classification_ipc"]
+    logger.info("Job %s: IPC codes from parsed document: %s", job_id, ipc_codes[:10] if ipc_codes else [])
+    logger.info("Job %s: es_stage1_limit = %d", job_id, config.es_stage1_limit)
 
-    # Stage 2: Cosmos query
-    tracker.start("cosmos_query", {"ipc_codes": ipc_codes})
+    # Stage 2: Keyword search (IPC filtering + keyword scoring)
+    # Note: cosmos_query was removed as keyword_search already includes IPC filtering in STAGE1
+    tracker.start("keyword_search", {"ipc_codes": ipc_codes})
+
+    # Build Cosmos-format JSON for keyword search
+    # Use source_json if available, otherwise build from parsed data
+    import re
+
+    source_json = parsed.get("source_json")
+    if source_json and isinstance(source_json, dict):
+        # source_jsonがある場合、それをベースにipc_prefixを追加
+        cosmos_format_json = dict(source_json)
+
+        # ipc_prefixを計算して追加（patent_search_pipelineが期待する形式）
+        ipc_prefixes = []
+        for ipc in ipc_codes:
+            ipc_str = ipc if isinstance(ipc, str) else ""
+            if ipc_str and len(ipc_str) >= 4:
+                s = ipc_str.upper()
+                if "/" in s:
+                    s = s.split("/", 1)[0]
+                cleaned = re.sub(r"\s+", "", s)[:5]
+                if cleaned and cleaned not in ipc_prefixes:
+                    ipc_prefixes.append(cleaned)
+
+        # bibliographic.classification.ipc_prefixを設定
+        if "bibliographic" not in cosmos_format_json:
+            cosmos_format_json["bibliographic"] = {}
+        if "classification" not in cosmos_format_json["bibliographic"]:
+            cosmos_format_json["bibliographic"]["classification"] = {}
+        cosmos_format_json["bibliographic"]["classification"]["ipc_prefix"] = ipc_prefixes
+
+        # claimsをclaim_text形式に変換（patent_search_pipelineが期待する形式）
+        original_claims = cosmos_format_json.get("claims", [])
+        converted_claims = []
+        for claim in original_claims:
+            if isinstance(claim, dict):
+                text = claim.get("text") or claim.get("claim_text", "")
+                if text:
+                    converted_claims.append({"claim_text": text})
+        if not converted_claims and parsed.get("claim1"):
+            converted_claims.append({"claim_text": parsed.get("claim1")})
+        cosmos_format_json["claims"] = converted_claims
+
+        # invention_titleを設定（titleがある場合）
+        if "bibliographic" in cosmos_format_json:
+            if "title" in cosmos_format_json["bibliographic"] and "invention_title" not in cosmos_format_json["bibliographic"]:
+                cosmos_format_json["bibliographic"]["invention_title"] = cosmos_format_json["bibliographic"]["title"]
+
+        logger.info("Job %s: Using source_json for keyword search, ipc_prefixes=%s", job_id, ipc_prefixes[:3])
+    else:
+        # source_jsonがない場合、parsedデータから構築
+        claims = parsed.get("claims") or []
+        claim_entries = []
+        for claim in claims:
+            text = (claim or {}).get("text")
+            if text:
+                claim_entries.append({"claim_text": text})
+        if not claim_entries and parsed.get("claim1"):
+            claim_entries.append({"claim_text": parsed.get("claim1")})
+
+        # Get IPC prefixes
+        ipc_prefixes = []
+        for ipc in ipc_codes:
+            ipc_str = ipc if isinstance(ipc, str) else ""
+            if ipc_str and len(ipc_str) >= 4:
+                s = ipc_str.upper()
+                if "/" in s:
+                    s = s.split("/", 1)[0]
+                cleaned = re.sub(r"\s+", "", s)[:5]
+                if cleaned and cleaned not in ipc_prefixes:
+                    ipc_prefixes.append(cleaned)
+
+        cosmos_format_json = {
+            "bibliographic": {
+                "invention_title": parsed.get("title", ""),
+                "publication": {"doc_number": parsed.get("patent_id", "")},
+                "classification": {
+                    "ipc_prefix": ipc_prefixes
+                }
+            },
+            "abstract": parsed.get("summary", ""),
+            "claims": claim_entries,
+            "description": None,
+        }
+
+        logger.info("Job %s: Built cosmos_format_json from parsed data, ipc_prefixes=%s", job_id, ipc_prefixes[:3])
+
+    # Run keyword search pipeline
+    search_result = run_patent_search_from_json(cosmos_format_json, job_manager, job_id)
+
+    narrowed_patent_ids = search_result.get("keyword_search_results", [])
+    logger.info("Job %s: Keyword search returned %d patents", job_id, len(narrowed_patent_ids))
+
+    tracker.update("keyword_search", {
+        "narrowed_count": len(narrowed_patent_ids),
+        "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
+        "stage2_keyword_filter_results": search_result.get("pipeline_stats", {}).get("stage2_keyword_filter_results", 0),
+    })
+    tracker.complete("keyword_search")
+
+    # Use narrowed patent_ids for subsequent processing
+    # Fetch documents from Cosmos for the narrowed patents
     cosmos_client = CosmosPatentClient(config)
     try:
-        cosmos_docs = cosmos_client.query_by_ipc_prefixes(ipc_codes, config.es_stage1_limit)
+        narrowed_cosmos_map = cosmos_client.fetch_by_patent_ids(narrowed_patent_ids[:config.es_stage1_limit])
     finally:
         cosmos_client.close()
 
-    if not cosmos_docs:
-        tracker.update(
-            "cosmos_query",
-            {
-                "matched_documents": 0,
-            },
-        )
-        raise IngestionError("Cosmos query returned no documents", status_code=404)
-
-    tracker.update(
-        "cosmos_query",
-        {
-            "matched_documents": len(cosmos_docs),
-        },
-    )
-
-    tracker.complete("cosmos_query")
-
-    # Stage 3: Trimming to Stage1 limit
-    tracker.start("trimming")
-    trimmed_docs_raw = sort_and_trim(cosmos_docs, config.es_stage1_limit)
-
     trimmed_docs: List[Dict] = []
     seen_trimmed: set[str] = set()
-    for doc in trimmed_docs_raw:
-        bibliographic = doc.get("bibliographic") or {}
-        publication = bibliographic.get("publication") or {}
-        patent_id = doc.get("patent_id") or doc.get("id") or publication.get("doc_number")
-        if not patent_id:
+    for patent_id in narrowed_patent_ids[:config.es_stage1_limit]:
+        if patent_id in seen_trimmed:
             continue
-        patent_id_str = str(patent_id)
-        if patent_id_str in seen_trimmed:
-            continue
-        seen_trimmed.add(patent_id_str)
+        seen_trimmed.add(patent_id)
+        cosmos_doc = narrowed_cosmos_map.get(patent_id, {})
         trimmed_docs.append(
             {
                 "patent_id": patent_id,
-                "title": doc.get("title") or parsed.get("title"),
-                "summary": doc.get("abstract") or doc.get("summary") or parsed.get("summary"),
-                "claim1": doc.get("claim1") or parsed.get("claim1"),
+                "title": cosmos_doc.get("title") or parsed.get("title"),
+                "summary": cosmos_doc.get("abstract") or cosmos_doc.get("summary") or parsed.get("summary"),
+                "claim1": cosmos_doc.get("claim1") or parsed.get("claim1"),
             }
         )
-    tracker.complete("trimming")
 
     stage1 = Stage1ElasticsearchIndexer(config)
     stage1.ensure_index()

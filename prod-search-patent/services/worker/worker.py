@@ -10,6 +10,7 @@ from pipeline import (
     PipelineConfig,
     JobState,
     run_pipeline,
+    run_patent_search_from_json,
 )
 
 logging.basicConfig(
@@ -17,6 +18,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger("worker")
+
+# Azure SDKのログを抑制（リクエスト/レスポンスヘッダーを非表示）
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+logging.getLogger("azure.cosmos").setLevel(logging.WARNING)
 
 config = PipelineConfig()
 job_manager = JobManager(config.redis_url)
@@ -52,7 +57,10 @@ async def process_job(job_id: str) -> None:
     job_manager.set_state(job_id, JobState(status="processing", detail=state.detail if state else {}))
 
     try:
-        await run_pipeline(config, job_manager, job_id, input_bytes)
+        # Run the full pipeline (parsing, cosmos query, keyword search, embedding, etc.)
+        pipeline_result = await run_pipeline(config, job_manager, job_id, input_bytes)
+        logger.info("Job %s: Pipeline completed successfully", job_id)
+
     except JobCancelledError:
         logger.info("Job %s cancelled during processing", job_id)
     except IngestionError as exc:

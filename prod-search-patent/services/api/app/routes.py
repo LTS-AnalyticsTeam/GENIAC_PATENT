@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict
 
 import httpx
+from azure.cosmos import CosmosClient
 from elasticsearch import Elasticsearch
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from neo4j import GraphDatabase
+from pydantic import BaseModel
 
 from pipeline import IngestionError, JobManager, PipelineConfig
 from pipeline.job_manager import JobState
 
-from .models import GraphResult, IngestResponse, JobCancelResponse, JobStatusResponse, PipelineResultResponse
+from .models import GraphResult, IngestResponse, JobCancelResponse, JobStatusResponse, PipelineResultResponse, KeywordSearchResultResponse
 from .deps import get_job_manager, get_pipeline_config
+
+
+class PatentNumberRequest(BaseModel):
+    patent_number: str
 
 router = APIRouter()
 
@@ -75,6 +82,51 @@ async def ingest_patent_text(
     return IngestResponse(job_id=job_id, status_url=status_url, result_url=result_url, detail=initial_detail)
 
 
+@router.post("/ingest-by-patent-number", response_model=IngestResponse, status_code=202)
+async def ingest_by_patent_number(
+    request: Request,
+    body: PatentNumberRequest,
+    job_manager: JobManager = Depends(get_job_manager),
+    config: PipelineConfig = Depends(get_pipeline_config),
+) -> IngestResponse:
+    """テスト用: 特許番号からCosmosDBのJSONを取得してジョブを作成"""
+    patent_number = body.patent_number.strip()
+
+    # 特許番号から数字部分を抽出 (JP2024001234A -> 2024001234)
+    import re
+    doc_number = re.sub(r'[^0-9]', '', patent_number)
+    if not doc_number:
+        raise HTTPException(status_code=400, detail="Invalid patent number format")
+
+    # CosmosDBから特許データを取得
+    try:
+        cosmos_client = CosmosClient(config.cosmos_endpoint, config.cosmos_key)
+        database = cosmos_client.get_database_client(config.cosmos_database)
+        container = database.get_container_client(config.cosmos_container)
+
+        query = f"SELECT * FROM c WHERE c.bibliographic.publication.doc_number = '{doc_number}'"
+        items = list(container.query_items(query=query, enable_cross_partition_query=True))
+
+        if not items:
+            raise HTTPException(status_code=404, detail=f"Patent {patent_number} not found in CosmosDB")
+
+        patent_json = items[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"CosmosDB error: {str(e)}")
+
+    # JSONをペイロードとして保存
+    initial_detail = _initial_job_detail()
+    job_id = job_manager.create_job(JobState(status="queued", detail=initial_detail))
+    job_manager.store_payload(job_id, {"json": json.dumps(patent_json, ensure_ascii=False)})
+    job_manager.enqueue_job(job_id)
+
+    status_url = str(request.url_for("get_job_status", job_id=job_id))
+    result_url = str(request.url_for("get_job_result", job_id=job_id))
+    return IngestResponse(job_id=job_id, status_url=status_url, result_url=result_url, detail=initial_detail)
+
+
 @router.get("/status/{job_id}", name="get_job_status", response_model=JobStatusResponse)
 def get_status(job_id: str, job_manager: JobManager = Depends(get_job_manager)) -> JobStatusResponse:
     state = job_manager.get_state(job_id)
@@ -112,6 +164,28 @@ def cancel_job(job_id: str, job_manager: JobManager = Depends(get_job_manager)) 
 
     removed = job_manager.cancel_job(job_id, reason="ユーザー操作によりキャンセルされました")
     return JobCancelResponse(job_id=job_id, status="cancelled", queue_entries_removed=removed)
+
+
+@router.get("/keyword-search-result/{job_id}", response_model=KeywordSearchResultResponse)
+def get_keyword_search_result(job_id: str, job_manager: JobManager = Depends(get_job_manager)) -> KeywordSearchResultResponse:
+    """キーワード検索結果（10,000件の特許番号リスト）を取得"""
+    state = job_manager.get_state(job_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    result_payload = job_manager.fetch_result(job_id)
+    if not result_payload:
+        raise HTTPException(status_code=404, detail="Keyword search result not available")
+
+    patent_ids = result_payload.get("keyword_search_results", [])
+    pipeline_stats = result_payload.get("pipeline_stats", {})
+
+    return KeywordSearchResultResponse(
+        job_id=job_id,
+        patent_ids=patent_ids,
+        pipeline_stats=pipeline_stats,
+        total_count=len(patent_ids)
+    )
 
 
 @router.get("/healthz")

@@ -1,6 +1,15 @@
 // frontend/src/components/PatentInput.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Upload, FileText, Plus, Trash2, Send, ExternalLink, FileText as FileIcon } from "lucide-react";
+import {
+  Upload,
+  FileText,
+  Plus,
+  Trash2,
+  Send,
+  ExternalLink,
+  FileText as FileIcon,
+  X,
+} from "lucide-react";
 import "./PatentInput.css";
 import StageProgress from "./StageProgress";
 import { StageDetail } from "../types";
@@ -15,15 +24,26 @@ const POLL_INTERVAL_MS = 3000;
 
 const STAGES = [
   { id: "parsing", label: "① テキスト解析" },
-  { id: "cosmos_query", label: "② Cosmos検索" },
-  { id: "trimming", label: "③ トリミング" },
-  { id: "embedding", label: "④ 埋め込み生成" },
-  { id: "stage1_indexing", label: "⑤ Stage1インデックス" },
-  { id: "vector_search", label: "⑥ ベクトル検索" },
-  { id: "stage2_indexing", label: "⑦ Neo4j登録" },
-  { id: "graph_rag", label: "⑧ Graph-RAG" },
-  { id: "analysis", label: "⑨ 特許分析" },
+  { id: "keyword_search", label: "② キーワード検索" },
+  { id: "embedding", label: "③ 埋め込み生成" },
+  { id: "stage1_indexing", label: "④ Stage1インデックス" },
+  { id: "vector_search", label: "⑤ ベクトル検索" },
+  { id: "stage2_indexing", label: "⑥ Neo4j登録" },
+  { id: "graph_rag", label: "⑦ Graph-RAG" },
+  { id: "analysis", label: "⑧ 特許分析" },
 ];
+
+// ステージIDを日本語ラベルに変換
+const STAGE_LABELS: Record<string, string> = {
+  parsing: "① テキスト解析",
+  keyword_search: "② キーワード検索",
+  embedding: "③ 埋め込み生成",
+  stage1_indexing: "④ Stage1インデックス",
+  vector_search: "⑤ ベクトル検索",
+  stage2_indexing: "⑥ Neo4j登録",
+  graph_rag: "⑦ Graph-RAG",
+  analysis: "⑧ 特許分析",
+};
 
 interface PatentSlot {
   id: string;
@@ -89,10 +109,92 @@ const PatentInput: React.FC = () => {
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const jobsRef = useRef<JobInfo[]>([]);
 
+  // キーワード検索結果モーダル用state
+  const [showPatentListModal, setShowPatentListModal] = useState(false);
+  const [patentListData, setPatentListData] = useState<{
+    jobId: string;
+    patentIds: string[];
+    totalCount: number;
+    pipelineStats: Record<string, unknown>;
+  } | null>(null);
+
+  // テスト用: 特許番号入力
+  const [testPatentNumber, setTestPatentNumber] = useState("");
+  const [testLoading, setTestLoading] = useState(false);
+
+  // キーワード検索結果を取得してモーダルを表示
+  const handleShowPatentList = async (jobId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/keyword-search-result/${jobId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setPatentListData({
+          jobId: data.job_id,
+          patentIds: data.patent_ids,
+          totalCount: data.total_count,
+          pipelineStats: data.pipeline_stats,
+        });
+        setShowPatentListModal(true);
+      } else {
+        alert("キーワード検索結果の取得に失敗しました");
+      }
+    } catch (err) {
+      console.error("Failed to fetch keyword search result", err);
+      alert("キーワード検索結果の取得に失敗しました");
+    }
+  };
+
+  // テスト用: 特許番号から分析を実行
+  const handleTestAnalysis = async () => {
+    if (!testPatentNumber.trim()) {
+      alert("特許番号を入力してください");
+      return;
+    }
+
+    setTestLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/ingest-by-patent-number`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ patent_number: testPatentNumber.trim() }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        alert(payload.detail ?? "ジョブ投入に失敗しました");
+        return;
+      }
+
+      const payload = await response.json();
+      const newJob: JobInfo = {
+        slotId: `test_${Date.now()}`,
+        jobId: payload.job_id,
+        fileName: `${testPatentNumber.trim()}.json`,
+        status: "queued",
+        detail: payload.detail ?? {},
+        pollActive: true,
+      };
+
+      setJobs((prev: JobInfo[]) => [newJob, ...prev]);
+      setTestPatentNumber("");
+      alert(`ジョブを受け付けました: ${testPatentNumber}`);
+    } catch (error) {
+      console.error("Error:", error);
+      alert("エラーが発生しました");
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
   // 特許を追加（最大5件）
   const addPatent = () => {
     if (patents.length < 5) {
-      setPatents([...patents, { id: `patent_${patents.length + 1}`, file: null }]);
+      setPatents([
+        ...patents,
+        { id: `patent_${patents.length + 1}`, file: null },
+      ]);
     }
   };
 
@@ -120,7 +222,9 @@ const PatentInput: React.FC = () => {
       const results = await Promise.all(
         jobIds.map(async (jobId) => {
           try {
-            const res = await fetch(`${API_BASE}/cancel/${jobId}`, { method: "POST" });
+            const res = await fetch(`${API_BASE}/cancel/${jobId}`, {
+              method: "POST",
+            });
             if (!res.ok) {
               console.error("Failed to cancel job", jobId, await res.text());
               return false;
@@ -133,7 +237,9 @@ const PatentInput: React.FC = () => {
         })
       );
       if (results.some((ok) => !ok)) {
-        alert("一部のジョブのキャンセルに失敗しました。数秒後に再度ご確認ください。");
+        alert(
+          "一部のジョブのキャンセルに失敗しました。数秒後に再度ご確認ください。"
+        );
       }
     }
     setPatents([{ id: "patent_1", file: null }]);
@@ -167,7 +273,9 @@ const PatentInput: React.FC = () => {
 
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
-          alert(`${slot.file.name}: ${payload.detail ?? "ジョブ投入に失敗しました"}`);
+          alert(
+            `${slot.file.name}: ${payload.detail ?? "ジョブ投入に失敗しました"}`
+          );
           continue;
         }
 
@@ -184,7 +292,9 @@ const PatentInput: React.FC = () => {
 
       if (newJobs.length > 0) {
         setJobs((prev) => [...newJobs, ...prev]);
-        alert(`${newJobs.length} 件のジョブを受け付けました。進捗は下部カードで確認できます。`);
+        alert(
+          `${newJobs.length} 件のジョブを受け付けました。進捗は下部カードで確認できます。`
+        );
       }
     } catch (error) {
       console.error("Error:", error);
@@ -200,7 +310,10 @@ const PatentInput: React.FC = () => {
       try {
         const res = await fetch(`${API_BASE}/status/${job.jobId}`);
         if (res.status === 404) {
-          updates[job.jobId] = { pollActive: false, error: "ジョブが見つかりません" };
+          updates[job.jobId] = {
+            pollActive: false,
+            error: "ジョブが見つかりません",
+          };
           continue;
         }
         const payload = await res.json();
@@ -214,7 +327,7 @@ const PatentInput: React.FC = () => {
         const baseUpdate: Partial<JobInfo> = {
           status: payload.status,
           detail: payload.detail,
-          candidateCount: detail?.candidate_count ?? job.candidateCount,
+          candidateCount: detail?.narrowed_count ?? job.candidateCount,
           error: errorMessage,
         };
 
@@ -228,6 +341,10 @@ const PatentInput: React.FC = () => {
             const resultPayload = await resultRes.json();
             baseUpdate.resultPayload = resultPayload;
             baseUpdate.pollActive = false;
+            // 完了済みジョブでもcandidateCountを設定（pipeline_statsから取得）
+            if (!baseUpdate.candidateCount && resultPayload.pipeline_stats) {
+              baseUpdate.candidateCount = resultPayload.pipeline_stats.stage2_keyword_filter_results;
+            }
           } else if (resultRes.status === 202) {
             baseUpdate.pollActive = true;
           } else {
@@ -245,7 +362,9 @@ const PatentInput: React.FC = () => {
 
     if (Object.keys(updates).length > 0) {
       setJobs((prev) =>
-        prev.map((item) => (updates[item.jobId] ? { ...item, ...updates[item.jobId] } : item))
+        prev.map((item) =>
+          updates[item.jobId] ? { ...item, ...updates[item.jobId] } : item
+        )
       );
     }
   };
@@ -269,7 +388,11 @@ const PatentInput: React.FC = () => {
         if (res.status === 200) {
           const payload = await res.json();
           setJobs((prev) =>
-            prev.map((item) => (item.jobId === job.jobId ? { ...item, resultPayload: payload } : item))
+            prev.map((item) =>
+              item.jobId === job.jobId
+                ? { ...item, resultPayload: payload }
+                : item
+            )
           );
           launchResultView(payload);
         }
@@ -286,7 +409,9 @@ const PatentInput: React.FC = () => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return;
     try {
-      const parsed = JSON.parse(stored) as { jobs?: Array<{ slotId: string; jobId: string; fileName: string }> };
+      const parsed = JSON.parse(stored) as {
+        jobs?: Array<{ slotId: string; jobId: string; fileName: string }>;
+      };
       if (parsed.jobs && Array.isArray(parsed.jobs) && parsed.jobs.length > 0) {
         const restored = parsed.jobs.map<JobInfo>((meta) => ({
           slotId: meta.slotId,
@@ -327,22 +452,25 @@ const PatentInput: React.FC = () => {
     return `${active} 実行中・${completed} 完了`;
   }, [jobs]);
 
-  const isResultReady = (job: JobInfo) => job.status === "completed" && Boolean(job.resultPayload);
+  const isResultReady = (job: JobInfo) =>
+    job.status === "completed" && Boolean(job.resultPayload);
 
   return (
     <div className="patent-input-container">
       <div className="header-section">
         <h1>特許分析システム</h1>
-        <p className="subtitle">JSONファイルをアップロードして特許の新規性・進歩性を分析します</p>
+        <p className="subtitle">
+          XMLファイルをアップロードして特許の新規性・進歩性を分析します
+        </p>
       </div>
-      
+
       {/* 出願特許の入力 */}
       <div className="patents-section">
         <h3>
           <FileText size={24} />
           出願特許（最大5件）
         </h3>
-        
+
         {patents.map((patent, index) => (
           <div key={patent.id} className="patent-input-item">
             <div className="patent-header">
@@ -357,16 +485,21 @@ const PatentInput: React.FC = () => {
                 </button>
               )}
             </div>
-            
+
             <div className="patent-content">
               <div className="file-upload-area">
                 <input
                   type="file"
                   accept=".txt"
-                  onChange={(e) => e.target.files && handleFileUpload(index, e.target.files[0])}
+                  onChange={(e) =>
+                    e.target.files && handleFileUpload(index, e.target.files[0])
+                  }
                   id={`patent-file-${index}`}
                 />
-                <label htmlFor={`patent-file-${index}`} className="file-upload-label">
+                <label
+                  htmlFor={`patent-file-${index}`}
+                  className="file-upload-label"
+                >
                   <Upload size={20} />
                   <span>.txt（XML）ファイルをアップロード</span>
                 </label>
@@ -380,7 +513,7 @@ const PatentInput: React.FC = () => {
             </div>
           </div>
         ))}
-        
+
         {patents.length < 5 && (
           <button className="add-patent-btn" onClick={addPatent}>
             <Plus size={20} />
@@ -392,7 +525,11 @@ const PatentInput: React.FC = () => {
       {/* 分析実行ボタン */}
       <div className="action-section">
         <div className="action-buttons">
-          <button className="reset-btn" onClick={resetAll} disabled={isLoading && patents.every((p) => !p.file)}>
+          <button
+            className="reset-btn"
+            onClick={resetAll}
+            disabled={isLoading && patents.every((p) => !p.file)}
+          >
             リセット
           </button>
           <button
@@ -415,6 +552,66 @@ const PatentInput: React.FC = () => {
         </div>
       </div>
 
+      {/* テスト用: 特許番号入力 */}
+      <div
+        className="test-section"
+        style={{
+          marginTop: "24px",
+          padding: "16px",
+          backgroundColor: "#fef3c7",
+          borderRadius: "8px",
+          border: "1px solid #f59e0b",
+        }}
+      >
+        <h4
+          style={{ margin: "0 0 12px 0", color: "#92400e", fontSize: "14px" }}
+        >
+          テスト用（後ほど削除）:
+          特許番号から分析(cosmosDBに保存されているjsonファイルを利用)
+        </h4>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <input
+            type="text"
+            placeholder="例: JP2024001234A または 2024001234"
+            value={testPatentNumber}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+              setTestPatentNumber(e.target.value)
+            }
+            style={{
+              flex: 1,
+              padding: "8px 12px",
+              borderRadius: "4px",
+              border: "1px solid #d1d5db",
+              fontSize: "14px",
+            }}
+            onKeyDown={(e: React.KeyboardEvent) => {
+              if (e.key === "Enter" && !testLoading) {
+                handleTestAnalysis();
+              }
+            }}
+          />
+          <button
+            onClick={handleTestAnalysis}
+            disabled={testLoading || !testPatentNumber.trim()}
+            style={{
+              padding: "8px 16px",
+              backgroundColor:
+                testLoading || !testPatentNumber.trim() ? "#d1d5db" : "#f59e0b",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor:
+                testLoading || !testPatentNumber.trim()
+                  ? "not-allowed"
+                  : "pointer",
+              fontSize: "14px",
+            }}
+          >
+            {testLoading ? "処理中..." : "テスト実行"}
+          </button>
+        </div>
+      </div>
+
       {jobs.length > 0 && (
         <section className="job-section">
           <div className="job-section__header">
@@ -432,20 +629,30 @@ const PatentInput: React.FC = () => {
                       <small>ID: {job.jobId}</small>
                     </div>
                   </div>
-                  <span className={statusBadgeClass(job.status)}>{job.status}</span>
+                  <span className={statusBadgeClass(job.status)}>
+                    {job.status}
+                  </span>
                 </header>
-                <StageProgress stages={STAGES} detail={job.detail} />
+                <StageProgress
+                  stages={STAGES}
+                  detail={job.detail}
+                  onShowPatentList={() => handleShowPatentList(job.jobId)}
+                  keywordSearchCount={job.candidateCount}
+                />
                 <div className="job-meta">
                   {job.candidateCount !== undefined && (
                     <div>
-                      <span>Cosmos 戻り件数</span>
+                      <span>現在の絞り込み件数</span>
                       <strong>{job.candidateCount.toLocaleString()} 件</strong>
                     </div>
                   )}
                   {job.detail?.current_stage && (
                     <div>
                       <span>現在ステージ</span>
-                      <strong>{job.detail.current_stage}</strong>
+                      <strong>
+                        {STAGE_LABELS[job.detail.current_stage] ||
+                          job.detail.current_stage}
+                      </strong>
                     </div>
                   )}
                 </div>
@@ -472,6 +679,142 @@ const PatentInput: React.FC = () => {
             ))}
           </div>
         </section>
+      )}
+
+      {/* キーワード検索結果モーダル */}
+      {showPatentListModal && patentListData && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowPatentListModal(false)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="modal-content"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+            style={{
+              backgroundColor: "white",
+              borderRadius: "8px",
+              padding: "24px",
+              maxWidth: "600px",
+              width: "90%",
+              maxHeight: "80vh",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: "18px" }}>
+                キーワード検索結果 ({patentListData.totalCount.toLocaleString()}
+                件)
+              </h3>
+              <button
+                onClick={() => setShowPatentListModal(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "4px",
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div
+              style={{ marginBottom: "12px", fontSize: "12px", color: "#666" }}
+            >
+              <p style={{ margin: "4px 0" }}>
+                STAGE1 IPC候補:{" "}
+                {(
+                  patentListData.pipelineStats.stage1_IPC_candidates as number
+                )?.toLocaleString() ?? "-"}
+                件
+              </p>
+              <p style={{ margin: "4px 0" }}>
+                STAGE2 キーワード絞込:{" "}
+                {(
+                  patentListData.pipelineStats
+                    .stage2_keyword_filter_results as number
+                )?.toLocaleString() ?? "-"}
+                件
+              </p>
+            </div>
+            <div
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                border: "1px solid #e5e7eb",
+                borderRadius: "4px",
+                padding: "8px",
+                fontFamily: "monospace",
+                fontSize: "12px",
+              }}
+            >
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr
+                    style={{
+                      position: "sticky",
+                      top: 0,
+                      backgroundColor: "#f9fafb",
+                    }}
+                  >
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      順位
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      特許番号
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {patentListData.patentIds.map(
+                    (patentId: string, index: number) => (
+                      <tr
+                        key={patentId}
+                        style={{ borderBottom: "1px solid #f3f4f6" }}
+                      >
+                        <td style={{ padding: "4px", color: "#6b7280" }}>
+                          {index + 1}
+                        </td>
+                        <td style={{ padding: "4px" }}>JP{patentId}A</td>
+                      </tr>
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

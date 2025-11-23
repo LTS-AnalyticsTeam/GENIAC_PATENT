@@ -41,3 +41,10 @@ class JobCancelResponse(BaseModel):
     job_id: str
     status: str
     queue_entries_removed: int = Field(0, description="Number of queued tasks removed")
+
+
+class KeywordSearchResultResponse(BaseModel):
+    job_id: str
+    patent_ids: List[str] = Field(default_factory=list)
+    pipeline_stats: Dict[str, Any] = Field(default_factory=dict)
+    total_count: int = 0
