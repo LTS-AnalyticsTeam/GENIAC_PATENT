@@ -473,91 +473,63 @@ async def run_pipeline(
 
     tracker.start("analysis", {"analysis_candidates": len(top_results)})
     analysis_service = AnalysisService()
-    analysis_map: Dict[str, dict] = {}
-    analysis_status: Dict[str, Dict[str, str]] = {}
+    analysis_payload: Dict | None = None
+    missing_candidates: List[str] = []
 
     if top_results:
         analysis_cosmos = CosmosPatentClient(config)
         try:
-            candidate_docs = analysis_cosmos.fetch_by_patent_ids(
+            candidate_docs_map = analysis_cosmos.fetch_by_patent_ids(
                 [entry["patent_id"] for entry in top_results if entry.get("patent_id")]
             )
         finally:
             analysis_cosmos.close()
 
-        work_items: List[PatentWorkItem] = []
-        missing_candidates: List[str] = []
+        ordered_candidates: List[Dict] = []
         for entry in top_results:
-            patent_id = entry.get("patent_id")
-            if not patent_id:
+            pid = entry.get("patent_id")
+            if not pid:
                 continue
-            candidate_json = candidate_docs.get(patent_id)
-            if not candidate_json:
-                missing_candidates.append(patent_id)
-                continue
-            work_items.append(
-                PatentWorkItem(
-                    patent_id=patent_id,
-                    title=entry.get("title"),
-                    source_json=alpha_source_json,
-                    candidate_json=candidate_json,
-                )
-            )
+            candidate_doc = candidate_docs_map.get(pid)
+            if candidate_doc:
+                ordered_candidates.append(candidate_doc)
+            else:
+                missing_candidates.append(pid)
 
         tracker.update(
             "analysis",
             {
-                "work_items": len(work_items),
+                "ordered_candidates": len(ordered_candidates),
                 "missing_candidates": missing_candidates,
             },
         )
 
-        if missing_candidates:
-            tracker.update(
-                "analysis",
-                {
-                    "error": "Cosmos DBに該当のデータがありませんでした",
-                },
-            )
-            raise IngestionError(
-                "Cosmos DBに該当のデータがありませんでした",
-                status_code=404,
-                detail={"missing_candidates": missing_candidates},
-            )
-
-        if work_items:
-            batch_results = await analysis_service.analyze_batch(work_items)
-            analyzed = 0
-            for result in batch_results:
-                analyzed += 1
-                analysis_status[result.patent_id] = {
-                    "status": result.status,
-                    "error": result.error_message or "",
-                }
-                if result.analysis:
-                    analysis_map[result.patent_id] = result.analysis.model_dump()
-            tracker.update("analysis", {"analyzed": analyzed})
-
-            for entry in top_results:
-                pid = entry.get("patent_id")
-                if not pid:
-                    continue
-                status_payload = analysis_status.get(pid)
-                if status_payload:
-                    entry["analysis_status"] = status_payload["status"]
-                    if status_payload["error"]:
-                        entry["analysis_error"] = status_payload["error"]
-                if pid in analysis_map:
-                    entry["analysis"] = analysis_map[pid]
+        if ordered_candidates:
+            try:
+                analysis_response = await analysis_service.analyze_candidates(
+                    alpha_json=alpha_source_json,
+                    candidates_json=ordered_candidates,
+                )
+                analysis_payload = analysis_response.model_dump()
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Analysis failed: %s", exc)
+                analysis_payload = None
 
     for entry in top_results:
-        pid = entry.get("patent_id")
-        if not pid:
-            continue
-        status_payload = analysis_status.get(pid)
-        if not status_payload:
+        if analysis_payload:
+            entry["analysis_status"] = "completed"
+            entry["analysis"] = analysis_payload
+        else:
             entry.setdefault("analysis_status", "failed")
             entry.setdefault("analysis_error", "解析結果を生成できませんでした")
+
+    if missing_candidates:
+        tracker.update(
+            "analysis",
+            {
+                "error": "Cosmos DBに該当のデータがありませんでした",
+            },
+        )
 
     tracker.complete("analysis")
 
@@ -572,7 +544,7 @@ async def run_pipeline(
             "vector_search_results": len(vector_docs),
             "vector_queries": len(generated_queries),
             "analysis_candidates": len(top_results),
-            "analysis_completed": len(analysis_map),
+            "analysis_completed": 1 if analysis_payload else 0,
         },
     }
 

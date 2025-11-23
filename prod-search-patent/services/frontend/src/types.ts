@@ -1,29 +1,31 @@
-export type Snippet = {
+export type Evidence = {
   section: string;
-  claim_no: number;
-  text: string;
-  offset: number;
-  len: number;
-  match_type: string;
-  score: number;
+  quote: string;
+  why: string;
+  offset?: number;
+  length?: number;
+  alpha_fragment?: string | null;
+  candidate_quote?: string | null;
 };
 
-export type Explanation = {
-  summary: string;
-  why_match: string[];
+export type ClaimAssessment = {
+  claim_no: number;
+  novelty: "denied" | "uncertain" | "supported";
+  inventive_step?: "denied" | "uncertain" | "supported";
+  evidence: Evidence[];
   examiner_hints: string[];
 };
 
-export type Candidate = {
+export type AssessmentCandidate = {
   doc_id: string;
   title: string;
   pub_number?: string | null;
-  year?: number | null;
-  ipc: string[];
   score: number;
-  snippets: Snippet[];
-  explanation: Explanation;
+  assessments: ClaimAssessment[];
+  summary?: string | null;
+  ipc?: string[];
   source_url?: string;
+  year?: number | null;
 };
 
 export type AlphaInfo = {
@@ -41,8 +43,8 @@ export type RunLimits = {
 export type AnalysisResponse = {
   run_id: string;
   alpha: AlphaInfo;
-  Ax: Candidate;
-  Ay: Candidate[];
+  claim1_candidates: AssessmentCandidate[];
+  rest_claim_candidates: AssessmentCandidate[];
   limits: RunLimits;
 };
 
