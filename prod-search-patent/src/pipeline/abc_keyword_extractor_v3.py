@@ -31,9 +31,46 @@ client_4o = AzureOpenAI(
     api_key=os.environ.get("API_KEY_4o"),
 )
 
-def extract_keywords_with_priority(title, abstract, claims_texts):
-    """LLMを使用してB・Cカテゴリキーワードを優先順位付きで抽出"""
-    
+def extract_keywords_with_priority(title, abstract, claims_texts, description=None):
+    """LLMを使用してB・Cカテゴリキーワードを優先順位付きで抽出
+
+    Args:
+        title: 特許タイトル
+        abstract: 要約
+        claims_texts: 請求項テキストのリスト
+        description: 明細書データ（技術分野、背景技術、課題、解決手段を含むdict）
+    """
+
+    # descriptionから追加セクションを抽出
+    technical_field = ""
+    background_art = ""
+    problem_to_solve = ""
+    means_for_solving = ""
+
+    if description:
+        # technical-field を抽出
+        tf_items = description.get('technical-field', [])
+        if tf_items:
+            technical_field = " ".join([item.get('text', '') for item in tf_items if isinstance(item, dict)])
+
+        # background-art を抽出
+        ba_items = description.get('background-art', [])
+        if ba_items:
+            background_art = " ".join([item.get('text', '') for item in ba_items if isinstance(item, dict)])
+
+        # summary-of-invention から課題と解決手段を抽出
+        summary = description.get('summary-of-invention', {})
+        if isinstance(summary, dict):
+            # tech-problem (課題)
+            tp_items = summary.get('tech-problem', [])
+            if tp_items:
+                problem_to_solve = " ".join([item.get('text', '') for item in tp_items if isinstance(item, dict)])
+
+            # tech-solution (解決手段)
+            ts_items = summary.get('tech-solution', [])
+            if ts_items:
+                means_for_solving = " ".join([item.get('text', '') for item in ts_items if isinstance(item, dict)])
+
     prompt = f"""
 # タスク
 以下の特許文書から、発明の核心となるキーワードを抽出してください。
@@ -78,7 +115,12 @@ AカテゴリーはスキップしてBとCのみ抽出します。
 # 特許インプット
 タイトル: {title}
 要約: {abstract}
-""" + "\n".join([f"請求項{i+1}: {ct[:500]}" for i, ct in enumerate(claims_texts[:3])]) + """
+""" + "\n".join([f"請求項{i+1}: {ct[:500]}" for i, ct in enumerate(claims_texts[:5])]) + f"""
+技術分野: {technical_field[:500] if technical_field else '(なし)'}
+背景技術: {background_art[:800] if background_art else '(なし)'}
+発明が解決しようとする課題: {problem_to_solve[:500] if problem_to_solve else '(なし)'}
+課題を解決するための手段: {means_for_solving[:800] if means_for_solving else '(なし)'}
+"""
 
 # 出力フォーマット（JSON形式）
 ```json
