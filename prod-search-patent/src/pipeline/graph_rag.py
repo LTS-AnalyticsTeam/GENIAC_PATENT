@@ -23,7 +23,7 @@ class GraphRAGService:
     def close(self) -> None:
         self.driver.close()
 
-    def top_k(self, patent_ids: List[str], alpha_id: str | None, k: int = 10) -> List[Dict]:
+    def top_k(self, patent_ids: List[str], alpha_id: str | None, k: int = 30) -> List[Dict]:
         if not patent_ids:
             return []
 

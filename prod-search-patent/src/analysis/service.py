@@ -48,7 +48,8 @@ class AnalysisService:
             endpoint=self.config.azure_openai_endpoint,
             api_key=self.config.azure_openai_key,
             api_version=self.config.azure_openai_api_version,
-            calls_per_minute=30,
+            # 50k TPM を安全に使うため、呼び出し回数を抑制
+            calls_per_minute=12,
         )
         self._chat_deployment = self.config.azure_openai_chat_deployment or self.config.azure_openai_deployment
 
@@ -88,42 +89,107 @@ class AnalysisService:
         claims_2_to_5 = self._extract_claims_2_to_5(alpha_json)
         alpha = self._build_alpha_info(alpha_json.get("patent_id", "alpha"), source_doc, claims_2_to_5, alpha_json.get("title"))
 
-        claim1_candidates: List[AssessmentCandidate] = []
-        rest_candidates: List[AssessmentCandidate] = []
+        # なるべく否定根拠の強いものを優先しつつ、必ず各カテゴリで1件以上返す。
+        def score_assessment(assess: AssessmentCandidate, consider_inventive: bool) -> float:
+            nov_denied = sum(1 for a in assess.assessments if a.novelty == "denied")
+            inv_denied = sum(1 for a in assess.assessments if consider_inventive and a.inventive_step == "denied")
+            evidence_total = sum(len(a.evidence) for a in assess.assessments)
+            return nov_denied * 2.0 + inv_denied * 1.5 + evidence_total * 0.1
 
-        first_batch = list(candidates_json[:5])
-        second_batch = list(candidates_json[5:10])
+        claim1_pool: List[Dict[str, Any]] = []
+        rest_pool: List[Dict[str, Any]] = []
+        MAX_EVALS = min(30, len(candidates_json))  # レート制限を避けるため評価上限を設定（50k TPM想定）
 
-        for candidate_json in first_batch:
+        for idx, candidate_json in enumerate(candidates_json[:MAX_EVALS]):
             cand_doc = from_patent_json_v1(candidate_json)
-            assessment = await self._llm_assess_candidate(
-                alpha=alpha,
-                candidate_json=candidate_json,
-                candidate_doc=cand_doc,
-                target_claims=[(1, source_doc.claim1, False)],
-            )
-            if assessment:
-                claim1_candidates.append(assessment)
 
-        if claims_2_to_5:
-            target_claims = [(c.get("num") or 0, c.get("text", ""), True) for c in claims_2_to_5 if c]
-            for candidate_json in second_batch:
-                cand_doc = from_patent_json_v1(candidate_json)
-                assessment = await self._llm_assess_candidate(
+            # 請求項1
+            try:
+                assess1 = await self._llm_assess_candidate(
                     alpha=alpha,
                     candidate_json=candidate_json,
                     candidate_doc=cand_doc,
-                    target_claims=target_claims,
+                    target_claims=[(1, source_doc.claim1, False)],
                 )
-                if assessment:
-                    rest_candidates.append(assessment)
+            except Exception as exc:  # rate limit や一時的エラーに備えてスキップ
+                assess1 = None
+            if assess1:
+                claim1_pool.append(
+                    {
+                        "assessment": assess1,
+                        "score": score_assessment(assess1, consider_inventive=False),
+                        "rank": idx,
+                        "doc_id": assess1.doc_id,
+                    }
+                )
 
-        limits = RunLimits(max_total=len(claim1_candidates) + len(rest_candidates), Ay_min=len(rest_candidates))
+            # 請求項2以降
+            if claims_2_to_5:
+                target_claims = [(c.get("num") or 0, c.get("text", ""), True) for c in claims_2_to_5 if c]
+                try:
+                    assess_rest = await self._llm_assess_candidate(
+                        alpha=alpha,
+                        candidate_json=candidate_json,
+                        candidate_doc=cand_doc,
+                        target_claims=target_claims,
+                    )
+                except Exception:
+                    assess_rest = None
+                if assess_rest:
+                    rest_pool.append(
+                        {
+                            "assessment": assess_rest,
+                            "score": score_assessment(assess_rest, consider_inventive=True),
+                            "rank": idx,
+                            "doc_id": assess_rest.doc_id,
+                        }
+                    )
+
+            # 早期終了: 十分に候補が溜まったら打ち切り
+            if len(claim1_pool) >= 8 and (not claims_2_to_5 or len(rest_pool) >= 8):
+                break
+
+        def pick_top(pool: List[Dict[str, Any]], max_items: int, require_denied: bool, used_ids: set[str]) -> List[AssessmentCandidate]:
+            filtered = []
+            for entry in pool:
+                assess = entry["assessment"]
+                has_denial = any(a.novelty == "denied" or a.inventive_step == "denied" for a in assess.assessments)
+                if require_denied and not has_denial:
+                    continue
+                if assess.doc_id in used_ids:
+                    continue
+                filtered.append(entry)
+            if not filtered and not require_denied:
+                filtered = [e for e in pool if e["assessment"].doc_id not in used_ids]
+            sorted_pool = sorted(filtered, key=lambda e: (-e["score"], e["rank"]))
+            selected: List[AssessmentCandidate] = []
+            for entry in sorted_pool:
+                if len(selected) >= max_items:
+                    break
+                assess = entry["assessment"]
+                used_ids.add(assess.doc_id)
+                selected.append(assess)
+            return selected
+
+        used_ids: set[str] = set()
+        # 請求項1: 否定あり優先、なければスコア上位から最低1件
+        claim1_selected = pick_top(claim1_pool, 5, require_denied=True, used_ids=used_ids)
+        if not claim1_selected and claim1_pool:
+            claim1_selected = pick_top(claim1_pool, 1, require_denied=False, used_ids=used_ids)
+
+        # 請求項2以降: 否定あり優先、なければスコア上位から最低1件（請求項が存在するときのみ）
+        rest_selected: List[AssessmentCandidate] = []
+        if claims_2_to_5:
+            rest_selected = pick_top(rest_pool, 5, require_denied=True, used_ids=used_ids)
+            if not rest_selected and rest_pool:
+                rest_selected = pick_top(rest_pool, 1, require_denied=False, used_ids=used_ids)
+
+        limits = RunLimits(max_total=len(claim1_selected) + len(rest_selected), Ay_min=len(rest_selected))
         return AnalysisResponse(
             run_id=f"analysis-{alpha.pub_number}",
             alpha=alpha,
-            claim1_candidates=claim1_candidates[:5],
-            rest_claim_candidates=rest_candidates[:5],
+            claim1_candidates=claim1_selected[:5] if claim1_selected else claim1_selected,
+            rest_claim_candidates=rest_selected[:5] if rest_selected else rest_selected,
             limits=limits,
         )
 
@@ -204,9 +270,9 @@ class AnalysisService:
                     "入力として与えられる特許α（対象特許）と候補先行技術を比較し、新規性・進歩性を否定できる根拠を最大限抽出し、JSONで返してください。"
                     "必ず指定フォーマットに従い、引用箇所は短く抜粋してください。"
                     "各エビデンスは『α請求項の該当部分（5〜30文字程度の短い片）』と『候補特許の該当部分（同程度の短い片）』のペアで必ず示してください。"
-                    "【デフォルト姿勢】常に新規性・進歩性を否定できる根拠を最優先で探索する。以下の場合のみ例外的に supported / uncertain を使う。"
-                    " supported: αの構成が候補に明確に欠落／矛盾し、否定できないと断定できる場合のみ。"
-                    " uncertain: 情報不足で存在/欠落が判断不能の場合のみ。差異があるだけで supported にしてはならない。実質同等なら denied とする。"
+                    "【デフォルト姿勢】否定根拠を優先して探索するが、以下の条件で supported / uncertain も柔軟に用いてよい。"
+                    " supported: αの必須構成に対し候補に明確な欠落・矛盾・非同等の差異があるとき。"
+                    " uncertain: 記載不足や曖昧表現で一致/不一致が判断できないとき（差異が小さい場合は denied も検討するが、無理に否定しない）。"
                     "【判定基準】"
                     " 新規性: αの必須構成が候補に明示または実質同等なら denied。α要件が明確に欠落する場合のみ supported。情報不足は uncertain。"
                     " 進歩性: 候補単独＋公知技術で容易想到なら denied。非自明な差異を具体的に示せる場合のみ supported。不足は uncertain。"

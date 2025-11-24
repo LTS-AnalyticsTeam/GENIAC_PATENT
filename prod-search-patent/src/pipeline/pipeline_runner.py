@@ -648,7 +648,7 @@ async def run_pipeline(
     # Stage 8: Graph-RAG ranking
     tracker.start("graph_rag")
     rag = GraphRAGService(config)
-    top_results = rag.top_k([doc.get("patent_id") for doc in stage2_docs], alpha_id=alpha_id or "", k=10)
+    top_results = rag.top_k([doc.get("patent_id") for doc in stage2_docs], alpha_id=alpha_id or "", k=30)
     top_results = _deduplicate_by_patent_id(top_results)
     rag.close()
     stage2.close()
