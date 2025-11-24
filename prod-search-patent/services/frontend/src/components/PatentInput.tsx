@@ -531,12 +531,6 @@ const PatentInput: React.FC = () => {
                   keywordSearchCount={job.candidateCount}
                 />
                 <div className="job-meta">
-                  {job.candidateCount !== undefined && (
-                    <div>
-                      <span>現在の絞り込み件数</span>
-                      <strong>{job.candidateCount.toLocaleString()} 件</strong>
-                    </div>
-                  )}
                   {job.detail?.current_stage && (
                     <div>
                       <span>現在ステージ</span>
