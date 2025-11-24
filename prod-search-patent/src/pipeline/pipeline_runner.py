@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Sequence
 
 from analysis import AnalysisService, PatentWorkItem
 
@@ -52,6 +53,81 @@ def _deduplicate_by_patent_id(documents: List[Dict]) -> List[Dict]:
         seen.add(patent_id_str)
         deduped.append(doc)
     return deduped
+
+
+def _to_ipc_prefixes(ipc_list: Sequence[str]) -> List[str]:
+    prefixes: List[str] = []
+    for ipc in ipc_list:
+        ipc_str = ipc if isinstance(ipc, str) else ""
+        if ipc_str and len(ipc_str) >= 4:
+            s = ipc_str.upper()
+            if "/" in s:
+                s = s.split("/", 1)[0]
+            cleaned = re.sub(r"\\s+", "", s)[:5]
+            if cleaned and cleaned not in prefixes:
+                prefixes.append(cleaned)
+    return prefixes
+
+
+def _extract_section_texts(description: Dict | None) -> List[Dict[str, str]]:
+    """Extract known sections (technical-field, background-art, summary-of-invention, industrial-applicability)."""
+    sections: List[Dict[str, str]] = []
+    if not description:
+        return sections
+    for key in ["technical-field", "background-art", "summary-of-invention", "industrial-applicability"]:
+        value = description.get(key)
+        if not value:
+            continue
+        text = ""
+        if isinstance(value, list):
+            parts = []
+            for entry in value:
+                if isinstance(entry, dict):
+                    parts.append(str(entry.get("text") or ""))
+                else:
+                    parts.append(str(entry))
+            text = " ".join([p for p in parts if p]).strip()
+        elif isinstance(value, dict):
+            text = str(value.get("text") or "")
+        else:
+            text = str(value)
+        text = (text or "").strip()
+        if text:
+            sections.append({"type": key, "text": text})
+    return sections
+
+
+def _extract_claim_texts(doc: Dict | None, fallback_claim1: str | None = None) -> List[str]:
+    claims: List[str] = []
+    if doc:
+        raw_claims = doc.get("claims") or []
+        if isinstance(raw_claims, list):
+            for entry in raw_claims:
+                if isinstance(entry, dict):
+                    text = entry.get("text") or entry.get("claim_text")
+                    if text:
+                        claims.append(str(text))
+                elif isinstance(entry, str):
+                    claims.append(entry)
+    if not claims and fallback_claim1:
+        claims.append(fallback_claim1)
+    return claims[:3]
+
+
+def _extract_citation_texts(description: Dict | None) -> List[str]:
+    citations: List[str] = []
+    if not description:
+        return citations
+    citation_entries = description.get("citation-list") or []
+    if isinstance(citation_entries, list):
+        for entry in citation_entries:
+            if isinstance(entry, dict):
+                txt = entry.get("text")
+                if txt:
+                    citations.append(str(txt))
+            elif isinstance(entry, str):
+                citations.append(entry)
+    return citations
 
 
 class StageTracker:
@@ -470,6 +546,7 @@ async def run_pipeline(
     tracker.update("stage2_indexing", {"graph_reset": True})
     stage2_docs = vector_docs if vector_docs else enriched_docs
     stage2_docs = _deduplicate_by_patent_id(stage2_docs)
+
     cosmos_client = CosmosPatentClient(config)
     try:
         stage2_cosmos_map = cosmos_client.fetch_by_patent_ids(
@@ -502,32 +579,62 @@ async def run_pipeline(
                     codes.append(text)
         return codes
 
+    alpha_id = parsed.get("patent_id") or alpha_source_json.get("bibliographic", {}).get("publication", {}).get("doc_number")
+    alpha_description = alpha_source_json.get("description") if isinstance(alpha_source_json, dict) else None
+    alpha_sections = _extract_section_texts(alpha_description)
+    if not alpha_sections:
+        # フォールバック: タイトル・サマリーをセクションとして扱う
+        if parsed.get("title"):
+            alpha_sections.append({"type": "technical-field", "text": str(parsed.get("title"))})
+        if parsed.get("summary"):
+            alpha_sections.append({"type": "summary-of-invention", "text": str(parsed.get("summary"))})
+    alpha_claims = _extract_claim_texts(alpha_source_json, fallback_claim1=parsed.get("claim1"))
+    alpha_citations = _extract_citation_texts(alpha_description)
+    alpha_ipc_codes = parsed.get("classification_ipc") or []
+
     stage2_graph_docs: List[Dict] = []
+    if alpha_id:
+        stage2_graph_docs.append(
+            {
+                "patent_id": alpha_id,
+                "title": parsed.get("title"),
+                "summary": parsed.get("summary"),
+                "classification_ipc": alpha_ipc_codes,
+                "ipc_prefixes": _to_ipc_prefixes(alpha_ipc_codes),
+                "sections": alpha_sections,
+                "claims": alpha_claims,
+                "citation_texts": alpha_citations,
+                "vector_score": None,
+            }
+        )
+
     for doc in stage2_docs:
         pid = doc.get("patent_id")
         if not pid:
             continue
-        cosmos_doc = stage2_cosmos_map.get(pid)
+        cosmos_doc = stage2_cosmos_map.get(pid) or {}
+        biblio = cosmos_doc.get("bibliographic") or {}
+        classification = _extract_classification(cosmos_doc)
+        description = cosmos_doc.get("description") if isinstance(cosmos_doc, dict) else None
+        sections = _extract_section_texts(description)
+        claims = _extract_claim_texts(cosmos_doc, fallback_claim1=doc.get("claim1"))
+        citations = _extract_citation_texts(description)
+
         graph_doc = {
             "patent_id": pid,
-            "title": None,
-            "summary": None,
-            "classification_ipc": None,
+            "title": cosmos_doc.get("title") or doc.get("title"),
+            "summary": cosmos_doc.get("abstract") or cosmos_doc.get("summary") or doc.get("summary"),
+            "classification_ipc": classification or doc.get("classification_ipc"),
+            "ipc_prefixes": _to_ipc_prefixes(classification or doc.get("classification_ipc") or []),
+            "sections": sections,
+            "claims": claims,
+            "citation_texts": citations,
+            "vector_score": doc.get("vector_score"),
+            "publication": biblio.get("publication"),
         }
-        if cosmos_doc:
-            graph_doc["title"] = cosmos_doc.get("title") or doc.get("title")
-            graph_doc["summary"] = (
-                cosmos_doc.get("abstract")
-                or cosmos_doc.get("summary")
-                or doc.get("summary")
-            )
-            classification = _extract_classification(cosmos_doc)
-            graph_doc["classification_ipc"] = classification or None
-        else:
-            graph_doc["title"] = doc.get("title")
-            graph_doc["summary"] = doc.get("summary")
         stage2_graph_docs.append(graph_doc)
 
+    stage2_graph_docs = _deduplicate_by_patent_id(stage2_graph_docs)
     stage2.upsert_graph(stage2_graph_docs)
     tracker.update(
         "stage2_indexing",
@@ -541,7 +648,7 @@ async def run_pipeline(
     # Stage 8: Graph-RAG ranking
     tracker.start("graph_rag")
     rag = GraphRAGService(config)
-    top_results = rag.top_k([doc.get("patent_id") for doc in stage2_docs], k=10)
+    top_results = rag.top_k([doc.get("patent_id") for doc in stage2_docs], alpha_id=alpha_id or "", k=10)
     top_results = _deduplicate_by_patent_id(top_results)
     rag.close()
     stage2.close()

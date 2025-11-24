@@ -26,11 +26,10 @@ const STAGES = [
   { id: "parsing", label: "① テキスト解析" },
   { id: "keyword_search", label: "② キーワード検索" },
   { id: "embedding", label: "③ 埋め込み生成" },
-  { id: "stage1_indexing", label: "④ Stage1インデックス" },
-  { id: "vector_search", label: "⑤ ベクトル検索" },
-  { id: "stage2_indexing", label: "⑥ Neo4j登録" },
-  { id: "graph_rag", label: "⑦ Graph-RAG" },
-  { id: "analysis", label: "⑧ 特許分析" },
+  { id: "vector_search", label: "④ ベクトル検索" },
+  { id: "stage2_indexing", label: "⑤ Graph登録" },
+  { id: "graph_rag", label: "⑥ Graph検索" },
+  { id: "analysis", label: "⑦ 特許分析" },
 ];
 
 // ステージIDを日本語ラベルに変換
@@ -38,11 +37,11 @@ const STAGE_LABELS: Record<string, string> = {
   parsing: "① テキスト解析",
   keyword_search: "② キーワード検索",
   embedding: "③ 埋め込み生成",
-  stage1_indexing: "④ Stage1インデックス",
-  vector_search: "⑤ ベクトル検索",
-  stage2_indexing: "⑥ Neo4j登録",
-  graph_rag: "⑦ Graph-RAG",
-  analysis: "⑧ 特許分析",
+  stage1_indexing: "④ ベクトル検索",
+  vector_search: "④ ベクトル検索",
+  stage2_indexing: "⑤ Graph登録",
+  graph_rag: "⑥ Graph検索",
+  analysis: "⑦ 特許分析",
 };
 
 interface PatentSlot {
@@ -118,10 +117,6 @@ const PatentInput: React.FC = () => {
     pipelineStats: Record<string, unknown>;
   } | null>(null);
 
-  // テスト用: 特許番号入力
-  const [testPatentNumber, setTestPatentNumber] = useState("");
-  const [testLoading, setTestLoading] = useState(false);
-
   // キーワード検索結果を取得してモーダルを表示
   const handleShowPatentList = async (jobId: string) => {
     try {
@@ -141,50 +136,6 @@ const PatentInput: React.FC = () => {
     } catch (err) {
       console.error("Failed to fetch keyword search result", err);
       alert("キーワード検索結果の取得に失敗しました");
-    }
-  };
-
-  // テスト用: 特許番号から分析を実行
-  const handleTestAnalysis = async () => {
-    if (!testPatentNumber.trim()) {
-      alert("特許番号を入力してください");
-      return;
-    }
-
-    setTestLoading(true);
-    try {
-      const response = await fetch(`${API_BASE}/ingest-by-patent-number`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ patent_number: testPatentNumber.trim() }),
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        alert(payload.detail ?? "ジョブ投入に失敗しました");
-        return;
-      }
-
-      const payload = await response.json();
-      const newJob: JobInfo = {
-        slotId: `test_${Date.now()}`,
-        jobId: payload.job_id,
-        fileName: `${testPatentNumber.trim()}.json`,
-        status: "queued",
-        detail: payload.detail ?? {},
-        pollActive: true,
-      };
-
-      setJobs((prev: JobInfo[]) => [newJob, ...prev]);
-      setTestPatentNumber("");
-      alert(`ジョブを受け付けました: ${testPatentNumber}`);
-    } catch (error) {
-      console.error("Error:", error);
-      alert("エラーが発生しました");
-    } finally {
-      setTestLoading(false);
     }
   };
 
@@ -548,66 +499,6 @@ const PatentInput: React.FC = () => {
                 分析を実行
               </>
             )}
-          </button>
-        </div>
-      </div>
-
-      {/* テスト用: 特許番号入力 */}
-      <div
-        className="test-section"
-        style={{
-          marginTop: "24px",
-          padding: "16px",
-          backgroundColor: "#fef3c7",
-          borderRadius: "8px",
-          border: "1px solid #f59e0b",
-        }}
-      >
-        <h4
-          style={{ margin: "0 0 12px 0", color: "#92400e", fontSize: "14px" }}
-        >
-          テスト用（後ほど削除）:
-          特許番号から分析(cosmosDBに保存されているjsonファイルを利用)
-        </h4>
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <input
-            type="text"
-            placeholder="例: JP2024001234A または 2024001234"
-            value={testPatentNumber}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-              setTestPatentNumber(e.target.value)
-            }
-            style={{
-              flex: 1,
-              padding: "8px 12px",
-              borderRadius: "4px",
-              border: "1px solid #d1d5db",
-              fontSize: "14px",
-            }}
-            onKeyDown={(e: React.KeyboardEvent) => {
-              if (e.key === "Enter" && !testLoading) {
-                handleTestAnalysis();
-              }
-            }}
-          />
-          <button
-            onClick={handleTestAnalysis}
-            disabled={testLoading || !testPatentNumber.trim()}
-            style={{
-              padding: "8px 16px",
-              backgroundColor:
-                testLoading || !testPatentNumber.trim() ? "#d1d5db" : "#f59e0b",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor:
-                testLoading || !testPatentNumber.trim()
-                  ? "not-allowed"
-                  : "pointer",
-              fontSize: "14px",
-            }}
-          >
-            {testLoading ? "処理中..." : "テスト実行"}
           </button>
         </div>
       </div>
