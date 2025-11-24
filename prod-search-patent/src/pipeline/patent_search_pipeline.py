@@ -110,15 +110,19 @@ def run_patent_search_from_json(json_payload: dict, job_manager=None, job_id: st
     claims_data = patent.get('claims', [])
     claims_texts = []
     if isinstance(claims_data, list):
-        claims_texts = [c.get('claim_text', '') for c in claims_data[:3] if isinstance(c, dict)]
+        claims_texts = [c.get('claim_text', '') for c in claims_data[:5] if isinstance(c, dict)]
     elif isinstance(claims_data, dict):
         claims_list = claims_data.get('claims', [])
-        claims_texts = [c.get('claim_text', '') for c in claims_list[:3] if isinstance(c, dict)]
+        claims_texts = [c.get('claim_text', '') for c in claims_list[:5] if isinstance(c, dict)]
+
+    # description（明細書）を取得
+    description = patent.get('description', None)
 
     keywords = extract_keywords_with_priority(
         str(title) if title else "",
         abstract if isinstance(abstract, str) else str(abstract),
-        claims_texts
+        claims_texts,
+        description
     )
 
     total_keywords = sum(len(keywords.get(cat, [])) for cat in ['B_MUST', 'B_SHOULD', 'C_MUST', 'C_SHOULD'])
@@ -564,15 +568,19 @@ def main():
     claims_data = patent.get('claims', [])
     claims_texts = []
     if isinstance(claims_data, list):
-        claims_texts = [c.get('claim_text', '') for c in claims_data[:3] if isinstance(c, dict)]
+        claims_texts = [c.get('claim_text', '') for c in claims_data[:5] if isinstance(c, dict)]
     elif isinstance(claims_data, dict):
         claims_list = claims_data.get('claims', [])
-        claims_texts = [c.get('claim_text', '') for c in claims_list[:3] if isinstance(c, dict)]
+        claims_texts = [c.get('claim_text', '') for c in claims_list[:5] if isinstance(c, dict)]
+
+    # description（明細書）を取得
+    description = patent.get('description', None)
 
     keywords = extract_keywords_with_priority(
         title,
         abstract if isinstance(abstract, str) else str(abstract),
-        claims_texts
+        claims_texts,
+        description
     )
 
     total_keywords = sum(len(keywords.get(cat, [])) for cat in ['B_MUST', 'B_SHOULD', 'C_MUST', 'C_SHOULD'])
