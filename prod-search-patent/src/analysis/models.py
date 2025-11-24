@@ -34,6 +34,52 @@ class PatentDoc(BaseModel):
     claim1: str
     description: Optional[Description] = None
 
+class Evidence(BaseModel):
+    section: str
+    quote: str
+    why: str
+    offset: Optional[int] = None
+    length: Optional[int] = None
+    alpha_fragment: Optional[str] = None
+    candidate_quote: Optional[str] = None
+
+class ClaimAssessment(BaseModel):
+    claim_no: int
+    novelty: Literal["denied", "uncertain", "supported"]
+    inventive_step: Optional[Literal["denied", "uncertain", "supported"]] = None
+    evidence: List[Evidence] = Field(default_factory=list)
+    examiner_hints: List[str] = Field(default_factory=list)
+
+class AssessmentCandidate(BaseModel):
+    doc_id: str
+    title: str
+    pub_number: Optional[str] = None
+    score: float = Field(..., ge=0.0, le=1.0)
+    assessments: List[ClaimAssessment]
+    ipc: List[str] = Field(default_factory=list)
+    summary: Optional[str] = None
+    source_url: Optional[str] = None
+    year: Optional[int] = Field(default=None, ge=0)
+
+class AlphaInfo(BaseModel):
+    title: str
+    pub_number: str
+    claim1: str
+    claims_rest: List[str]
+
+class RunLimits(BaseModel):
+    max_total: int
+    Ay_min: int = Field(..., ge=0)
+
+class AnalysisResponse(BaseModel):
+    run_id: str
+    alpha: AlphaInfo
+    claim1_candidates: List[AssessmentCandidate]
+    rest_claim_candidates: List[AssessmentCandidate]
+    limits: RunLimits
+
+# ---- Legacy types (for stub generators and internal heuristics) ----
+
 class Snippet(BaseModel):
     section: str
     claim_no: int = Field(..., ge=0)
@@ -48,8 +94,6 @@ class Explanation(BaseModel):
     why_match: List[str]
     examiner_hints: List[str]
 
-# ---- 「参照箇所表示」用 ----
-
 class Span(BaseModel):
     start: int
     end: int
@@ -59,8 +103,8 @@ class EvidenceHit(BaseModel):
     num: Optional[str] = None
     text: str
     spans: List[Span] = Field(default_factory=list)
-    support: int = 0            # 何モデルが支持
-    score: float = 0.0          # 信頼度（0-1）
+    support: int = 0
+    score: float = 0.0
 
 class ModelVote(BaseModel):
     model_name: str
@@ -82,27 +126,8 @@ class Candidate(BaseModel):
     year: Optional[int] = Field(default=None, ge=0)
     ipc: List[str] = Field(default_factory=list)
     score: float = Field(..., ge=0.0, le=1.0)
-    snippets: List[Snippet]
+    snippets: List[Snippet] = Field(default_factory=list)
     explanation: Explanation
     source_url: Optional[str] = None
-
-    # 追加（UI用）
     evidence_hits: List[EvidenceHit] = Field(default_factory=list)
     judgment_basis: Optional[JudgmentBasis] = None
-
-class AlphaInfo(BaseModel):
-    title: str
-    pub_number: str
-    claim1: str
-    claims_rest: List[str]
-
-class RunLimits(BaseModel):
-    max_total: int
-    Ay_min: int = Field(..., ge=0)
-
-class AnalysisResponse(BaseModel):
-    run_id: str
-    alpha: AlphaInfo
-    Ax: Candidate
-    Ay: List[Candidate]
-    limits: RunLimits

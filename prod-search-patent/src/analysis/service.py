@@ -1,22 +1,23 @@
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .models import (
     AlphaInfo,
     AnalysisResponse,
-    Candidate,
-    Explanation,
+    AssessmentCandidate,
+    ClaimAssessment,
+    Evidence,
     PatentDoc,
     RunLimits,
-    Snippet,
 )
+from .services.aoai import AOAIClient
+from pipeline.config import PipelineConfig
 from .services.json_adapter import from_patent_json_v1
-from .services.matcher_heuristic import char_shingle_matcher, bigram_matcher, unigram_matcher
-from .services.ensemble import ensemble_hits
-from .stub_search import search_prior_art
 
 
 @dataclass(slots=True)
@@ -39,7 +40,17 @@ class BatchAnalysisResult:
 
 
 class AnalysisService:
-    """FastAPIに依存しない特許分析ロジック。"""
+    """FastAPIに依存しない特許分析ロジック。LLMで請求項ごとに新規性/進歩性を判定する。"""
+
+    def __init__(self, config: Optional[PipelineConfig] = None) -> None:
+        self.config = config or PipelineConfig()
+        self.aoai_client = AOAIClient(
+            endpoint=self.config.azure_openai_endpoint,
+            api_key=self.config.azure_openai_key,
+            api_version=self.config.azure_openai_api_version,
+            calls_per_minute=30,
+        )
+        self._chat_deployment = self.config.azure_openai_chat_deployment or self.config.azure_openai_deployment
 
     async def analyze_single(
         self,
@@ -53,72 +64,68 @@ class AnalysisService:
         claims_2_to_5 = self._extract_claims_2_to_5(source_json)
         alpha = self._build_alpha_info(patent_id, source_doc, claims_2_to_5, title)
 
-        ax_candidate: Optional[Candidate] = None
-        if candidate_json:
-            cand_doc = from_patent_json_v1(candidate_json)
-            ax_candidate = self._build_candidate_from_doc(
-                cand_doc,
-                candidate_json,
-                source_doc,
-                alpha.claim1,
-            )
-
-        if not ax_candidate:
-            ax_candidate, stub_ay = search_prior_art(
-                claim1=alpha.claim1,
-                claims_rest=alpha.claims_rest,
-                source_patent=source_doc,
-            )
-        ay_candidates: List[Candidate] = []
-        limits = RunLimits(max_total=1 + len(ay_candidates), Ay_min=len(ay_candidates))
+        claim1_candidates, rest_candidates = self._prepare_candidates(
+            source_doc,
+            claims_2_to_5,
+            candidate_json,
+        )
+        limits = RunLimits(max_total=len(claim1_candidates) + len(rest_candidates), Ay_min=len(rest_candidates))
         return AnalysisResponse(
             run_id=f"analysis-{patent_id}",
             alpha=alpha,
-            Ax=ax_candidate,
-            Ay=ay_candidates,
+            claim1_candidates=claim1_candidates,
+            rest_claim_candidates=rest_candidates,
             limits=limits,
         )
 
-    async def analyze_batch(
+    async def analyze_candidates(
         self,
-        items: Sequence[PatentWorkItem],
         *,
-        shared_candidate_json: Optional[Dict[str, Any]] = None,
-    ) -> List[BatchAnalysisResult]:
-        results: List[BatchAnalysisResult] = []
-        for item in items:
-            candidate_json = item.candidate_json or shared_candidate_json
-            try:
-                analysis = await self.analyze_single(
-                    patent_id=item.patent_id,
-                    title=item.title,
-                    source_json=item.source_json,
+        alpha_json: Dict[str, Any],
+        candidates_json: Sequence[Dict[str, Any]],
+    ) -> AnalysisResponse:
+        source_doc = from_patent_json_v1(alpha_json)
+        claims_2_to_5 = self._extract_claims_2_to_5(alpha_json)
+        alpha = self._build_alpha_info(alpha_json.get("patent_id", "alpha"), source_doc, claims_2_to_5, alpha_json.get("title"))
+
+        claim1_candidates: List[AssessmentCandidate] = []
+        rest_candidates: List[AssessmentCandidate] = []
+
+        first_batch = list(candidates_json[:5])
+        second_batch = list(candidates_json[5:10])
+
+        for candidate_json in first_batch:
+            cand_doc = from_patent_json_v1(candidate_json)
+            assessment = await self._llm_assess_candidate(
+                alpha=alpha,
+                candidate_json=candidate_json,
+                candidate_doc=cand_doc,
+                target_claims=[(1, source_doc.claim1, False)],
+            )
+            if assessment:
+                claim1_candidates.append(assessment)
+
+        if claims_2_to_5:
+            target_claims = [(c.get("num") or 0, c.get("text", ""), True) for c in claims_2_to_5 if c]
+            for candidate_json in second_batch:
+                cand_doc = from_patent_json_v1(candidate_json)
+                assessment = await self._llm_assess_candidate(
+                    alpha=alpha,
                     candidate_json=candidate_json,
+                    candidate_doc=cand_doc,
+                    target_claims=target_claims,
                 )
-                results.append(
-                    BatchAnalysisResult(
-                        patent_id=item.patent_id,
-                        title=analysis.alpha.title,
-                        pub_number=analysis.alpha.pub_number,
-                        analysis=analysis,
-                        status="completed",
-                        error_message=None,
-                        processed_at=datetime.utcnow().isoformat(),
-                    )
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                results.append(
-                    BatchAnalysisResult(
-                        patent_id=item.patent_id,
-                        title=item.title or f"特許{item.patent_id}",
-                        pub_number="ERROR",
-                        analysis=None,
-                        status="failed",
-                        error_message=str(exc),
-                        processed_at=datetime.utcnow().isoformat(),
-                    )
-                )
-        return results
+                if assessment:
+                    rest_candidates.append(assessment)
+
+        limits = RunLimits(max_total=len(claim1_candidates) + len(rest_candidates), Ay_min=len(rest_candidates))
+        return AnalysisResponse(
+            run_id=f"analysis-{alpha.pub_number}",
+            alpha=alpha,
+            claim1_candidates=claim1_candidates[:5],
+            rest_claim_candidates=rest_candidates[:5],
+            limits=limits,
+        )
 
     @staticmethod
     def _extract_claims_2_to_5(source_json: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -150,67 +157,6 @@ class AnalysisService:
             claims_rest=claims_rest,
         )
 
-    def _build_candidate_from_doc(
-        self,
-        candidate_doc: PatentDoc,
-        candidate_json: Dict[str, Any],
-        source_doc: PatentDoc,
-        claim1_snippet: str,
-    ) -> Candidate:
-        ipc_codes = self._extract_ipc_codes(candidate_json)
-        doc_id = candidate_json.get("patent_id") or candidate_doc.pub_number or candidate_doc.title or "candidate"
-        explanation = Explanation(
-            summary="",
-            why_match=[],
-            examiner_hints=[],
-        )
-        comparison = self._compare_claims(source_doc.claim1, candidate_doc.claim1)
-        explanation.summary = comparison["summary"]
-        explanation.why_match = comparison["details"]
-        candidate = Candidate(
-            doc_id=str(doc_id),
-            title=candidate_doc.title or "主引例（請求項1の新規性）",
-            pub_number=candidate_doc.pub_number or "UNKNOWN",
-            year=2019,
-            ipc=ipc_codes or ["UNKNOWN"],
-            score=0.75,
-            snippets=[],
-            explanation=explanation,
-            source_url=None,
-        )
-        self._attach_evidence(candidate, source_doc, candidate_doc)
-        return candidate
-
-    @staticmethod
-    def _build_ay_candidates(claims_2_to_5: Sequence[Dict[str, str]]) -> List[Candidate]:
-        ay_candidates: List[Candidate] = []
-        for idx, claim_info in enumerate(claims_2_to_5[:2], start=1):
-            if not claim_info:
-                continue
-            explanation = Explanation(
-                summary="副引例による進歩性判定",
-                why_match=[
-                    f"【請求項{claim_info['num']}の進歩性判定】\n"
-                    "主引例と公知技術の組み合わせにより容易想到",
-                    f"《請求項内容》\n{claim_info['text'][:200]}...",
-                ],
-                examiner_hints=[],
-            )
-            ay_candidates.append(
-                Candidate(
-                    doc_id=f"ay-claim{claim_info['num']}",
-                    title=f"請求項{claim_info['num']}の進歩性判定",
-                    pub_number=f"副引例{idx}",
-                    year=2018,
-                    ipc=["H04L 29/08"],
-                    score=0.65,
-                    snippets=[],
-                    explanation=explanation,
-                    source_url=None,
-                )
-            )
-        return ay_candidates
-
     @staticmethod
     def _extract_ipc_codes(candidate_json: Dict[str, Any]) -> List[str]:
         ipc_codes: List[str] = []
@@ -236,49 +182,218 @@ class AnalysisService:
                     ipc_codes.append(text)
         return ipc_codes
 
-    def _attach_evidence(self, candidate: Candidate, source_doc: PatentDoc, candidate_doc: PatentDoc) -> None:
-        if not candidate_doc.description or not source_doc.description:
-            return
-        hits1 = unigram_matcher(source_doc, candidate_doc)
-        hits2 = bigram_matcher(source_doc, candidate_doc)
-        hits3 = char_shingle_matcher(source_doc, candidate_doc)
-        hits, judgment = ensemble_hits(source_doc, candidate_doc, [hits1, hits2, hits3])
-        if hits:
-            candidate.evidence_hits = hits
-            candidate.judgment_basis = judgment
-            snippets: List[Snippet] = []
-            for idx, hit in enumerate(hits[:3]):
-                first_span = hit.spans[0] if hit.spans else None
-                snippets.append(
-                    Snippet(
-                        section=hit.section,
-                        claim_no=1,
-                        text=hit.text,
-                        offset=first_span.start if first_span else 0,
-                        len=(first_span.end - first_span.start) if first_span else min(len(hit.text), 80),
-                        match_type="match",
-                        score=round(min(0.95, 0.6 + 0.1 * hit.support - idx * 0.05), 2),
-                    )
+    async def _llm_assess_candidate(
+        self,
+        *,
+        alpha: AlphaInfo,
+        candidate_json: Dict[str, Any],
+        candidate_doc: PatentDoc,
+        target_claims: Sequence[Tuple[int, str, bool]],
+    ) -> Optional[AssessmentCandidate]:
+        if not self._chat_deployment:
+            return None
+
+        doc_id = candidate_json.get("patent_id") or candidate_doc.pub_number or candidate_doc.title or "candidate"
+        ipc_codes = self._extract_ipc_codes(candidate_json)
+        prompt = self._build_prompt(alpha, candidate_json, target_claims)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "あなたは特許審査の専門家（審査官）として行動します。"
+                    "入力として与えられる特許α（対象特許）と候補先行技術を比較し、新規性・進歩性を否定できる根拠を最大限抽出し、JSONで返してください。"
+                    "必ず指定フォーマットに従い、引用箇所は短く抜粋してください。"
+                    "各エビデンスは『α請求項の該当部分（5〜30文字程度の短い片）』と『候補特許の該当部分（同程度の短い片）』のペアで必ず示してください。"
+                    "【デフォルト姿勢】常に新規性・進歩性を否定できる根拠を最優先で探索する。以下の場合のみ例外的に supported / uncertain を使う。"
+                    " supported: αの構成が候補に明確に欠落／矛盾し、否定できないと断定できる場合のみ。"
+                    " uncertain: 情報不足で存在/欠落が判断不能の場合のみ。差異があるだけで supported にしてはならない。実質同等なら denied とする。"
+                    "【判定基準】"
+                    " 新規性: αの必須構成が候補に明示または実質同等なら denied。α要件が明確に欠落する場合のみ supported。情報不足は uncertain。"
+                    " 進歩性: 候補単独＋公知技術で容易想到なら denied。非自明な差異を具体的に示せる場合のみ supported。不足は uncertain。"
+                    "【エビデンス記載】各請求項ごとに必ず1ペア以上の証拠を返す。denied時は否定根拠を必ず含める。supportedの場合は『なぜ否定できないか』をwhyに明示。"
+                    "whyには技術的理由を簡潔に記述し、不要な前置きは省く。"
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self.aoai_client.chat(
+            deployment=self._chat_deployment,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            max_retries=5,
+        )
+        parsed = self._parse_llm_response(raw, target_claims)
+        assessments: List[ClaimAssessment] = []
+        for item in parsed:
+            assessments.append(
+                ClaimAssessment(
+                    claim_no=item.get("claim_no", 0),
+                    novelty=item.get("novelty", "uncertain"),
+                    inventive_step=item.get("inventive_step"),
+                    evidence=[
+                        Evidence(
+                            section=e.get("section", "unknown"),
+                            quote=e.get("candidate_quote") or e.get("quote", ""),
+                            why=e.get("why", ""),
+                            offset=e.get("offset"),
+                            length=e.get("length"),
+                            alpha_fragment=e.get("alpha_fragment"),
+                            candidate_quote=e.get("candidate_quote") or e.get("quote"),
+                        )
+                        for e in item.get("evidence", []) if e
+                    ],
+                    examiner_hints=item.get("examiner_hints", []) or [],
                 )
-            candidate.snippets = snippets
+            )
+
+        return AssessmentCandidate(
+            doc_id=str(doc_id),
+            title=candidate_doc.title or "先行例",
+            pub_number=candidate_doc.pub_number or "UNKNOWN",
+            score=0.75,
+            assessments=assessments,
+            ipc=ipc_codes or ["UNKNOWN"],
+            summary=candidate_json.get("summary") or candidate_json.get("abstract"),
+            source_url=None,
+        )
+
+    def _build_prompt(
+        self,
+        alpha: AlphaInfo,
+        candidate_json: Dict[str, Any],
+        target_claims: Sequence[Tuple[int, str, bool]],
+    ) -> str:
+        summary = candidate_json.get("summary") or candidate_json.get("abstract") or ""
+        claim1 = (candidate_json.get("claim1") or candidate_json.get("claims", [{}])[0].get("text", "")) if candidate_json.get("claims") else candidate_json.get("claim1", "")
+        claims_texts: List[str] = []
+        claims = candidate_json.get("claims") or []
+        for cl in claims[:5]:
+            if not cl:
+                continue
+            num = cl.get("num") or cl.get("claim_no") or ""
+            text = cl.get("text") or ""
+            if num:
+                claims_texts.append(f"請求項{num}: {text}")
+        target_claim_lines = []
+        for num, text, include_inventive in target_claims:
+            target_claim_lines.append(f"- 請求項{num} ({'進歩性も判定' if include_inventive else '新規性のみ'}): {text}")
+
+        prompt_parts = [
+            "【対象特許（α）】",
+            f"タイトル: {alpha.title}",
+            f"請求項1: {alpha.claim1}",
+            f"請求項2以降: {' / '.join(alpha.claims_rest) if alpha.claims_rest else 'なし'}",
+            "",
+            "【比較候補】",
+            f"タイトル: {candidate_json.get('title') or candidate_json.get('bibliographic', {}).get('title') or '不明'}",
+            f"公報番号: {candidate_json.get('patent_id') or candidate_json.get('id') or candidate_json.get('pub_number') or '不明'}",
+            f"要約: {summary}",
+            f"請求項1(候補): {claim1}",
+            f"主要な請求項抜粋: {' / '.join(claims_texts[:3]) if claims_texts else 'なし'}",
+            "",
+            "【判定対象の請求項（α）】",
+            "\n".join(target_claim_lines),
+            "",
+            "以下のJSON形式で返してください。不要な文章は書かないこと。",
+            "{",
+            '  "assessments": [',
+            '    {',
+            '      "claim_no": <数値>,',
+            '      "novelty": "denied|uncertain|supported",',
+            '      "inventive_step": "denied|uncertain|supported|null",',
+            '      "evidence": [',
+            '        {',
+            '          "alpha_fragment": "α請求項の該当部分",',
+            '          "candidate_quote": "候補特許の該当部分",',
+            '          "why": "なぜ新規性/進歩性が否定されるか",',
+            '          "section": "claims|description|abstract|other",',
+            '          "offset": null,',
+            '          "length": null',
+            '        }',
+            '      ],',
+            '      "examiner_hints": ["審査官への示唆"]',
+            "    }",
+            "  ]",
+            "}",
+            "根拠は短い引用で示し、必ず日本語で回答してください。",
+        ]
+        return "\n".join(prompt_parts)
+
+    def _parse_llm_response(self, raw: Dict[str, Any], target_claims: Sequence[Tuple[int, str, bool]]) -> List[Dict[str, Any]]:
+        content = None
+        choices = raw.get("choices") if isinstance(raw, dict) else None
+        if choices and isinstance(choices, list):
+            message = choices[0].get("message") if choices else None
+            if message:
+                content = message.get("content")
+        if not content and isinstance(raw, dict):
+            content = raw.get("content")
+        if not content:
+            return self._empty_assessments(target_claims)
+
+        try:
+            parsed = json.loads(content)
+        except Exception:
+            return self._empty_assessments(target_claims)
+
+        assessments = parsed.get("assessments") if isinstance(parsed, dict) else None
+        if not isinstance(assessments, list):
+            return self._empty_assessments(target_claims)
+
+        cleaned: List[Dict[str, Any]] = []
+        for item in assessments:
+            if not isinstance(item, dict):
+                continue
+            claim_no = item.get("claim_no")
+            if claim_no is None:
+                continue
+            novelty = item.get("novelty", "uncertain")
+            inventive = item.get("inventive_step")
+            if inventive == "null":
+                inventive = None
+            evidence_raw = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+            evidence: List[Dict[str, Any]] = []
+            for ev in evidence_raw:
+                if not isinstance(ev, dict):
+                    continue
+                evidence.append(
+                    {
+                        "alpha_fragment": ev.get("alpha_fragment"),
+                        "candidate_quote": ev.get("candidate_quote") or ev.get("quote"),
+                        "why": ev.get("why"),
+                        "section": ev.get("section"),
+                        "offset": ev.get("offset"),
+                        "length": ev.get("length"),
+                        "quote": ev.get("candidate_quote") or ev.get("quote"),
+                    }
+                )
+            hints = item.get("examiner_hints") if isinstance(item.get("examiner_hints"), list) else []
+            cleaned.append(
+                {
+                    "claim_no": claim_no,
+                    "novelty": novelty,
+                    "inventive_step": inventive,
+                    "evidence": evidence,
+                    "examiner_hints": hints,
+                }
+            )
+
+        if not cleaned:
+            return self._empty_assessments(target_claims)
+        return cleaned
 
     @staticmethod
-    def _compare_claims(alpha_claim1: str, candidate_claim1: str) -> Dict[str, List[str] | str]:
-        summary = "請求項1の対比結果: "
-        if not candidate_claim1:
-            return {
-                "summary": summary + "候補請求項のテキストが存在しません。",
-                "details": ["候補文書に請求項1が無いため新規性比較ができません。"],
-            }
-        details: List[str] = []
-        alpha_tokens = [t.strip() for t in alpha_claim1.split("、") if t.strip()]
-        candidate_tokens = [t.strip() for t in candidate_claim1.split("、") if t.strip()]
-        matches = [token for token in alpha_tokens if token and token in candidate_tokens]
-        if matches:
-            summary += "主要構成が候補請求項と一致しています。"
-            for token in matches:
-                details.append(f"構成要素「{token}」が候補請求項にも記載されており、新規性が否定される可能性があります。")
-        else:
-            summary += "一致する構成要素が見つかりませんでした。"
-            details.append("候補文書に請求項1の主要構成要素が見つからず、新規性は維持される可能性があります。")
-        return {"summary": summary, "details": details}
+    def _empty_assessments(target_claims: Sequence[Tuple[int, str, bool]]) -> List[Dict[str, Any]]:
+        payload = []
+        for num, _text, include_inventive in target_claims:
+            payload.append(
+                {
+                    "claim_no": num,
+                    "novelty": "uncertain",
+                    "inventive_step": "uncertain" if include_inventive else None,
+                    "evidence": [],
+                    "examiner_hints": [],
+                }
+            )
+        return payload
