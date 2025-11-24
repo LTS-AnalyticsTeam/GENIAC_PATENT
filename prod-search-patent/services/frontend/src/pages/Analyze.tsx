@@ -197,8 +197,8 @@ const Analyze = () => {
 
           <section className="card-group">
             <header className="section-header">
-              <h2>🎯 最も類似している先行技術</h2>
-              <span className="muted">A(x): 最も関連性の高い特許</span>
+              <h2>請求項1 新規性は Ax</h2>
+              <span className="muted">Ax: 請求項1の新規性を否定し得る先行技術</span>
             </header>
             <ResultCard candidate={result.Ax} kind="Ax" terms={buildTerms(result.Ax)} />
           </section>
@@ -206,8 +206,8 @@ const Analyze = () => {
           {result.Ay && result.Ay.length > 0 && (
             <section className="card-group">
               <header className="section-header">
-                <h2>📚 その他の関連先行技術</h2>
-                <span className="muted">A(y): 関連性のある特許群</span>
+                <h2>請求項2以降 新規性/進歩性は Ay</h2>
+                <span className="muted">Ay: 請求項2以降の新規性/進歩性を否定し得る先行技術</span>
               </header>
               <div className="ay-list">
                 {result.Ay.map((candidate) => (

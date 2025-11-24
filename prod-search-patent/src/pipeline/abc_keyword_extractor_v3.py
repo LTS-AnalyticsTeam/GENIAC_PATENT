@@ -1,9 +1,6 @@
 import os
-import csv
 import re
-from datetime import datetime
 from dotenv import load_dotenv
-from azure.cosmos import CosmosClient
 from openai import AzureOpenAI
 
 """
@@ -17,19 +14,42 @@ ABC キーワード抽出 v3
 
 load_dotenv()
 
-# Azure OpenAI クライアント (gpt-5-mini用)
-client = AzureOpenAI(
-    api_version=os.environ.get("API_VERSION"),
-    azure_endpoint=os.environ.get("ENDPOINT"),
-    api_key=os.environ.get("API_KEY"),
-)
 
-# Azure OpenAI クライアント (gpt-4o用 - フォールバック)
-client_4o = AzureOpenAI(
-    api_version=os.environ.get("API_VERSION_4o"),
-    azure_endpoint=os.environ.get("ENDPOINT_4o"),
-    api_key=os.environ.get("API_KEY_4o"),
-)
+def _get_clients():
+    """Lazy-initialize Azure OpenAI clients to avoid import-time failures."""
+    api_version = (
+        os.environ.get("API_VERSION")
+        or os.environ.get("OPENAI_API_VERSION")
+        or os.environ.get("AZURE_OPENAI_API_VERSION")
+    )
+    endpoint = (
+        os.environ.get("ENDPOINT")
+        or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        or os.environ.get("AOAI_ENDPOINT")
+    )
+    api_key = (
+        os.environ.get("API_KEY")
+        or os.environ.get("AZURE_OPENAI_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+    )
+    api_version_4o = os.environ.get("API_VERSION_4o") or api_version
+    endpoint_4o = os.environ.get("ENDPOINT_4o") or endpoint
+    api_key_4o = os.environ.get("API_KEY_4o") or api_key
+
+    if not api_version or not endpoint or not api_key:
+        raise RuntimeError("Azure OpenAI credentials (API_VERSION/ENDPOINT/API_KEY) are required for keyword extraction.")
+
+    client_primary = AzureOpenAI(
+        api_version=api_version,
+        azure_endpoint=endpoint,
+        api_key=api_key,
+    )
+    client_fallback = AzureOpenAI(
+        api_version=api_version_4o,
+        azure_endpoint=endpoint_4o,
+        api_key=api_key_4o,
+    )
+    return [("gpt-5-mini", client_primary), ("gpt-4o", client_fallback)]
 
 def extract_keywords_with_priority(title, abstract, claims_texts, description=None):
     """LLMを使用してB・Cカテゴリキーワードを優先順位付きで抽出
@@ -120,10 +140,10 @@ AカテゴリーはスキップしてBとCのみ抽出します。
 背景技術: {background_art[:800] if background_art else '(なし)'}
 発明が解決しようとする課題: {problem_to_solve[:500] if problem_to_solve else '(なし)'}
 課題を解決するための手段: {means_for_solving[:800] if means_for_solving else '(なし)'}
-"""
 
 # 出力フォーマット（JSON形式）
-```json
+出力は必ず以下のJSONスキーマに従い、コードブロック内に記述してください。
+```
 {{
   "B_MUST": [
     {{
@@ -151,15 +171,10 @@ AカテゴリーはスキップしてBとCのみ抽出します。
   ]
 }}
 ```
-
-重要: JSON形式で出力してください。コードブロックの中にJSONを記述してください。
 """
     
     # Azure OpenAI: gpt-5-mini を優先、失敗時に gpt-4o へフォールバック
-    models = [
-        ("gpt-5-mini", client),
-        ("gpt-4o", client_4o)
-    ]
+    models = _get_clients()
 
     for model_name, api_client in models:
         try:
