@@ -1,5 +1,0 @@
-run_id,case_id,syutugan,ipc_prefix,ipc_filtered,sorted,limited,indexed,claim_hits,abstract_hits,merged_hits,ax_hit,matched_ax_docs,claim_queries,abstract_queries,ax_in_ipc_filtered,ax_in_sorted
-validation_1112031150,CASE_0019,2015185935,H04N5,95649,95649,30000,29703,564,457,948,False,,q0:100;q1:100;q2:100;q3:2;q4:100;q5:100;q6:7;q7:7;q8:5;q9:81,q0:68;q1:1;q2:100;q3:100;q4:100;q5:0;q6:100;q7:48;q8:23;q9:100,True,False
-validation_1112060918,CASE_1434,2022520585,C23C16,17737,17737,17737,17562,68,1,68,False,,q0:2;q1:1;q2:1;q3:1;q4:1;q5:64;q6:1;q7:1;q8:1;q9:4,q0:1;q1:1;q2:1;q3:1;q4:1;q5:1;q6:1;q7:1;q8:1;q9:1,False,False
-validation_1112060918,CASE_1435,2022522492,H04W24,9552,9552,9552,9323,6,0,6,False,,q0:2;q1:0;q2:1;q3:0;q4:3;q5:1;q6:0;q7:1;q8:0;q9:0,要約:0,False,False
-validation_1112060918,CASE_0097,2016209667,B23K26,15564,15564,15564,15310,11,1,11,False,,q0:9;q1:1;q2:1;q3:1;q4:1;q5:1;q6:1;q7:0;q8:3;q9:1,q0:0;q1:1;q2:1;q3:0;q4:0;q5:0;q6:1;q7:1;q8:0;q9:1,False,False

@@ -32,6 +32,11 @@ except ImportError:  # pragma: no cover
     from openai import AzureOpenAI  # type: ignore
     OpenAI = None  # type: ignore
 
+try:  # pragma: no cover
+    import tiktoken
+except ImportError:  # pragma: no cover
+    tiktoken = None
+
 # Load environment variables early
 load_dotenv()
 
@@ -42,6 +47,17 @@ logging.basicConfig(
 )
 
 BULK_BATCH_SIZE = int(os.getenv("ES_BULK_BATCH_SIZE", "100"))
+VECTOR_THRESHOLD = float(os.getenv("VECTOR_SCORE_THRESHOLD", "0.4"))
+KEYWORD_THRESHOLD = float(os.getenv("KEYWORD_SCORE_THRESHOLD", "0.4"))
+VECTOR_WEIGHT = float(os.getenv("VECTOR_SCORE_WEIGHT", "0.4"))
+KEYWORD_WEIGHT = float(os.getenv("KEYWORD_SCORE_WEIGHT", "0.6"))
+CHAT_COMPLETION_CONTEXT_LIMIT = int(os.getenv("CHAT_COMPLETION_CONTEXT_LIMIT", "8192"))
+CHAT_COMPLETION_TOKEN_MARGIN = int(os.getenv("CHAT_COMPLETION_TOKEN_MARGIN", "512"))
+QUERY_CONTEXT_CHAR_LIMIT = int(os.getenv("QUERY_CONTEXT_CHAR_LIMIT", "7500"))
+DEFAULT_TOKEN_ENCODING = os.getenv("QUERY_GENERATOR_TOKEN_ENCODING", "cl100k_base")
+EMBEDDING_CONTEXT_LIMIT = int(os.getenv("EMBEDDING_CONTEXT_LIMIT", "8192"))
+EMBEDDING_TOKEN_MARGIN = int(os.getenv("EMBEDDING_TOKEN_MARGIN", "0"))
+EMBEDDING_CONTEXT_CHAR_LIMIT = int(os.getenv("EMBEDDING_CONTEXT_CHAR_LIMIT", "20000"))
 
 
 def normalize_patent_number(identifier: str) -> str:
@@ -79,6 +95,64 @@ def truncate_text(value: str, max_chars: int) -> str:
     if not value:
         return ""
     return value[:max_chars]
+
+
+def truncate_text_by_tokens(value: str, max_tokens: int, encoding=None) -> str:
+    """
+    Truncate text by token count using tiktoken when available.
+    Falls back to a conservative character limit if encoding is missing.
+    """
+    if not value or max_tokens <= 0:
+        return ""
+
+    if encoding is None:
+        if not tiktoken:
+            approx_chars = max(1, max_tokens // 4)
+            return value[:approx_chars]
+        try:
+            encoding = tiktoken.get_encoding(DEFAULT_TOKEN_ENCODING)
+        except Exception:  # pragma: no cover
+            encoding = None
+
+    if encoding is None:
+        approx_chars = max(1, max_tokens // 4)
+        return value[:approx_chars]
+
+    tokens = encoding.encode(value)
+    if len(tokens) <= max_tokens:
+        return value
+    truncated_tokens = tokens[:max_tokens]
+    return encoding.decode(truncated_tokens)
+
+
+def resolve_token_encoding(
+    preferred_encoding: Optional[str],
+    model_name: Optional[str],
+    context: str,
+):
+    if not tiktoken:
+        return None
+    if preferred_encoding:
+        try:
+            return tiktoken.get_encoding(preferred_encoding)
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                "%s: Failed to load preferred token encoding %s: %s",
+                context,
+                preferred_encoding,
+                exc,
+            )
+    if model_name:
+        try:
+            return tiktoken.encoding_for_model(model_name)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("%s: Failed to derive encoding for model %s: %s", context, model_name, exc)
+    fallback_name = DEFAULT_TOKEN_ENCODING or "cl100k_base"
+    try:
+        return tiktoken.get_encoding(fallback_name)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("%s: Failed to initialize fallback token encoding %s: %s", context, fallback_name, exc)
+        return None
 
 
 def clean_ipc_prefix(value: Optional[str]) -> Optional[str]:
@@ -176,6 +250,23 @@ class QueryGenerator:
                 " もしくは OpenAI (OPENAI_API_KEY) の設定が必要です。"
             )
 
+        model_limit = max(1, CHAT_COMPLETION_CONTEXT_LIMIT)
+        margin = CHAT_COMPLETION_TOKEN_MARGIN
+        if margin >= model_limit:
+            margin = max(0, model_limit - 1)
+        self.context_token_limit = max(1, model_limit - margin)
+        self.context_char_limit = QUERY_CONTEXT_CHAR_LIMIT
+        self._token_encoding = self._init_token_encoding()
+        if self._token_encoding is None:
+            logger.warning(
+                "tiktoken encoding unavailable; prompt truncation will fallback to conservative character slicing."
+            )
+
+    def _init_token_encoding(self):
+        preferred_encoding = os.getenv("QUERY_GENERATOR_TOKEN_ENCODING")
+        model_name = self.openai_chat_model if self.provider == "openai" else None
+        return resolve_token_encoding(preferred_encoding, model_name, "QueryGenerator")
+
     def _call_chat(self, system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> str:
         try:
             if self.provider == "azure":
@@ -219,12 +310,25 @@ class QueryGenerator:
             raise RuntimeError(f"{label} entries insufficient: {len(items)}/{expected_len}")
         return items
 
+    def _truncate_prompt_content(self, section_label: str, base_text: str) -> str:
+        limited_chars = truncate_text(base_text, self.context_char_limit)
+        truncated = truncate_text_by_tokens(limited_chars, self.context_token_limit, self._token_encoding)
+        if truncated != base_text:
+            logger.debug(
+                "Section %s truncated for prompt safety (chars=%s -> %s).",
+                section_label,
+                len(base_text),
+                len(truncated),
+            )
+        return truncated
+
     def generate_queries(self, section_label: str, base_text: str, num_items: int) -> Dict[str, List[str]]:
         content = (base_text or "").strip()
         if not content:
             raise ValueError(f"{section_label} text is empty; cannot generate queries.")
 
-        context = f"{section_label}:\n{truncate_text(content, 2000)}"
+        truncated_content = self._truncate_prompt_content(section_label, content)
+        context = f"{section_label}:\n{truncated_content}"
 
         vector_system = (
             "あなたは日本語の特許理解に長けたアシスタントです。"
@@ -421,6 +525,15 @@ class EmbeddingService:
         self.client = AzureOpenAI(azure_endpoint=endpoint, api_key=api_key, api_version=api_version)
         self._dimension: Optional[int] = None
         self._cache: Dict[str, List[float]] = {}
+        model_limit = max(1, EMBEDDING_CONTEXT_LIMIT)
+        margin = max(0, min(model_limit - 1, EMBEDDING_TOKEN_MARGIN))
+        self.embedding_token_limit = max(1, model_limit - margin)
+        self.embedding_char_limit = EMBEDDING_CONTEXT_CHAR_LIMIT
+        self._token_encoding = self._init_token_encoding()
+        if self._token_encoding is None:
+            logger.warning(
+                "EmbeddingService: tiktoken encoding unavailable; falling back to conservative character truncation."
+            )
 
     @property
     def dimension(self) -> Optional[int]:
@@ -435,7 +548,7 @@ class EmbeddingService:
         return self._dimension or len(probe)
 
     def embed_text(self, text: Optional[str]) -> Optional[List[float]]:
-        cleaned = (text or "").strip()
+        cleaned = self._prepare_input(text)
         if not cleaned:
             return None
         if cleaned in self._cache:
@@ -446,6 +559,24 @@ class EmbeddingService:
         if not self._dimension:
             self._dimension = len(vector)
         return vector
+
+    def _init_token_encoding(self):
+        preferred = os.getenv("EMBEDDING_TOKEN_ENCODING")
+        return resolve_token_encoding(preferred, None, "EmbeddingService")
+
+    def _prepare_input(self, text: Optional[str]) -> str:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return ""
+        limited_chars = truncate_text(cleaned, self.embedding_char_limit)
+        truncated = truncate_text_by_tokens(limited_chars, self.embedding_token_limit, self._token_encoding)
+        if truncated != cleaned:
+            logger.debug(
+                "Embedding input truncated from %s to %s characters to respect token limit.",
+                len(cleaned),
+                len(truncated),
+            )
+        return truncated
 
 
 class ElasticsearchIndexManager:
@@ -524,6 +655,87 @@ class ElasticsearchIndexManager:
         self.client.indices.refresh(index=self.index_name)
         return success_total
 
+    def keyword_search(
+        self,
+        query_text: Optional[str],
+        text_field: str,
+        size: int,
+        min_score: float,
+    ) -> List[Dict]:
+        if not query_text:
+            return []
+        body = {
+            "size": size,
+            "_source": ["doc_number", "publication_date", "ipc_prefix", "claim_text", "abstract_text"],
+            "query": {
+                "match": {
+                    text_field: {
+                        "query": query_text,
+                        "operator": "and",
+                    }
+                }
+            },
+        }
+        response = self.client.search(index=self.index_name, body=body)
+        hits = []
+        for hit in response["hits"]["hits"]:
+            if hit["_score"] < min_score:
+                continue
+            source = hit.get("_source", {})
+            doc_number = source.get("doc_number") or hit.get("_id")
+            hits.append(
+                {
+                    "doc_number": doc_number,
+                    "publication_date": source.get("publication_date"),
+                    "ipc_prefix": source.get("ipc_prefix", []),
+                    "claim_text": source.get("claim_text"),
+                    "abstract_text": source.get("abstract_text"),
+                    "_score": hit["_score"],
+                }
+            )
+        return hits
+
+    def vector_search(
+        self,
+        query_vector: Optional[List[float]],
+        vector_field: str,
+        size: int,
+        min_score: float,
+    ) -> List[Dict]:
+        if not query_vector:
+            return []
+        body = {
+            "size": size,
+            "_source": ["doc_number", "publication_date", "ipc_prefix", "claim_text", "abstract_text"],
+            "query": {
+                "script_score": {
+                    "query": {"match_all": {}},
+                    "script": {
+                        "source": f"cosineSimilarity(params.vector, '{vector_field}')",
+                        "params": {"vector": query_vector},
+                    },
+                }
+            },
+        }
+        response = self.client.search(index=self.index_name, body=body)
+        hits = []
+        for hit in response["hits"]["hits"]:
+            if hit["_score"] < min_score:
+                continue
+            source = hit.get("_source", {})
+            doc_number = source.get("doc_number") or hit.get("_id")
+            hits.append(
+                {
+                    "doc_number": doc_number,
+                    "publication_date": source.get("publication_date"),
+                    "ipc_prefix": source.get("ipc_prefix", []),
+                    "claim_text": source.get("claim_text"),
+                    "abstract_text": source.get("abstract_text"),
+                    "_score": hit["_score"],
+                }
+            )
+        return hits
+
     def hybrid_search(
         self,
         query_text: Optional[str],
@@ -533,6 +745,7 @@ class ElasticsearchIndexManager:
         size: int,
         lexical_weight: float,
         score_field: str,
+        score_threshold: float,
     ) -> List[Dict]:
         if not query_text or not query_vector:
             return []
@@ -563,6 +776,8 @@ class ElasticsearchIndexManager:
         response = self.client.search(index=self.index_name, body=body)
         hits = []
         for hit in response["hits"]["hits"]:
+            if hit["_score"] < score_threshold:
+                continue
             source = hit.get("_source", {})
             doc_number = source.get("doc_number") or hit.get("_id")
             hits.append(
@@ -719,6 +934,7 @@ class PatentSearchValidator:
         vector_field: str,
         text_field: str,
         score_field: str,
+        ax_doc_numbers: Sequence[str],
     ) -> Tuple[List[Dict], List[str]]:
         if not base_text:
             return [], [f"{section_label}:0"]
@@ -729,30 +945,62 @@ class PatentSearchValidator:
             section_label,
             self.top_k,
         )
-        generated = self.generator.generate_queries(section_label, base_text, self.num_queries)
+        try:
+            generated = self.generator.generate_queries(section_label, base_text, self.num_queries)
+        except Exception as exc:
+            logger.error("Query generation failed for %s: %s", section_label, exc)
+            return [], [f"error:{exc}"]
         vector_passages = generated["vector_passages"]
         keyword_queries = generated["keyword_queries"]
 
         aggregated: Dict[str, Dict] = {}
         query_stats: List[str] = []
+        ax_doc_set = {doc for doc in ax_doc_numbers if doc}
 
         for idx, (vector_passage, keyword_query) in enumerate(zip(vector_passages, keyword_queries)):
             query_vector = self.embedding.embed_text(vector_passage)
             if not query_vector:
-                query_stats.append(f"q{idx}:0")
+                query_stats.append(f"q{idx}:0:False")
                 continue
-            hits = self.es.hybrid_search(
+            keyword_hits = self.es.keyword_search(
                 query_text=keyword_query,
-                query_vector=query_vector,
-                vector_field=vector_field,
                 text_field=text_field,
                 size=self.top_k,
-                lexical_weight=self.lexical_weight,
-                score_field=score_field,
+                min_score=KEYWORD_THRESHOLD,
             )
-            unique_ids = {hit.get("doc_number") for hit in hits if hit.get("doc_number")}
-            query_stats.append(f"q{idx}:{len(unique_ids)}")
-            self._update_multi_query_hits(aggregated, hits, score_field)
+            vector_hits = self.es.vector_search(
+                query_vector=query_vector,
+                vector_field=vector_field,
+                size=self.top_k,
+                min_score=VECTOR_THRESHOLD,
+            )
+            combined_hits: List[Dict] = []
+            doc_ids = {hit["doc_number"] for hit in keyword_hits} | {hit["doc_number"] for hit in vector_hits}
+            keyword_map = {hit["doc_number"]: hit for hit in keyword_hits}
+            vector_map = {hit["doc_number"]: hit for hit in vector_hits}
+            for doc_id in doc_ids:
+                keyword_score = keyword_map.get(doc_id, {}).get("_score", 0.0)
+                vector_score = vector_map.get(doc_id, {}).get("_score", 0.0)
+                if keyword_score < KEYWORD_THRESHOLD and vector_score < VECTOR_THRESHOLD:
+                    continue
+                combined_score = KEYWORD_WEIGHT * keyword_score + VECTOR_WEIGHT * vector_score
+                source_hit = keyword_map.get(doc_id) or vector_map.get(doc_id)
+                combined_hits.append(
+                    {
+                        "doc_number": doc_id,
+                        "publication_date": source_hit.get("publication_date"),
+                        "ipc_prefix": source_hit.get("ipc_prefix", []),
+                        "claim_text": source_hit.get("claim_text"),
+                        "abstract_text": source_hit.get("abstract_text"),
+                        "score_keyword": keyword_score,
+                        "score_vector": vector_score,
+                        score_field: combined_score,
+                    }
+                )
+            unique_ids = {hit["doc_number"] for hit in combined_hits if hit.get("doc_number")}
+            ax_hit = any(doc_id in ax_doc_set for doc_id in unique_ids if doc_id)
+            query_stats.append(f"q{idx}:{len(unique_ids)}:{ax_hit}")
+            self._update_multi_query_hits(aggregated, combined_hits, score_field)
 
         aggregated_list = list(aggregated.values())
         aggregated_list.sort(
@@ -881,52 +1129,44 @@ class PatentSearchValidator:
                 if on_case_completed:
                     on_case_completed(skip_result)
                 continue
-            logger.info(
-                "Phase[Case] %s | syutugan=%s | IPC=%s -> starting claim/abstract searches.",
-                context.case_id,
-                context.syutugan,
-                context.ipc_prefix,
-            )
             try:
+                logger.info(
+                    "Phase[Case] %s | syutugan=%s | IPC=%s -> starting claim/abstract searches.",
+                    context.case_id,
+                    context.syutugan,
+                    context.ipc_prefix,
+                )
                 claim_hits, claim_query_stats = self._run_multi_query_field(
                     "請求項1",
                     context.claim_text,
                     "claim_vector",
                     "claim_text",
                     "score_claim",
+                    context.ax_doc_numbers,
                 )
-            except Exception as exc:
-                logger.error("Multi-query (claims) failed for %s: %s", context.syutugan, exc)
-                claim_hits, claim_query_stats = [], [f"error:{exc}"]
-
-            try:
                 abstract_hits, abstract_query_stats = self._run_multi_query_field(
                     "要約",
                     context.abstract_text,
                     "abstract_vector",
                     "abstract_text",
                     "score_abstract",
+                    context.ax_doc_numbers,
                 )
-            except Exception as exc:
-                logger.error("Multi-query (abstract) failed for %s: %s", context.syutugan, exc)
-                abstract_hits, abstract_query_stats = [], [f"error:{exc}"]
-
-            merged_hits = self._merge_results(claim_hits, abstract_hits)
-            merged_doc_numbers = {hit["doc_number"] for hit in merged_hits}
-            matched = [
-                original
-                for original, digits in zip(context.ax_docs, context.ax_doc_numbers)
-                if digits and digits in merged_doc_numbers
-            ]
-            counts.update(
-                {
-                    "claim_hits": len(claim_hits),
-                    "abstract_hits": len(abstract_hits),
-                    "merged_hits": len(merged_hits),
-                }
-            )
-            results.append(
-                CaseResult(
+                merged_hits = self._merge_results(claim_hits, abstract_hits)
+                merged_doc_numbers = {hit["doc_number"] for hit in merged_hits}
+                matched = [
+                    original
+                    for original, digits in zip(context.ax_docs, context.ax_doc_numbers)
+                    if digits and digits in merged_doc_numbers
+                ]
+                counts.update(
+                    {
+                        "claim_hits": len(claim_hits),
+                        "abstract_hits": len(abstract_hits),
+                        "merged_hits": len(merged_hits),
+                    }
+                )
+                completed_result = CaseResult(
                     case_id=context.case_id,
                     syutugan=context.syutugan,
                     ipc_prefix=context.ipc_prefix,
@@ -941,17 +1181,33 @@ class PatentSearchValidator:
                     ax_in_ipc_filtered=ax_in_filtered,
                     ax_in_sorted=ax_in_limited,
                 )
-            )
-            if on_case_completed:
-                on_case_completed(results[-1])
-            logger.info(
-                "Phase[Case] %s completed | claim_hits=%s | abstract_hits=%s | merged=%s | hit=%s",
-                context.case_id,
-                len(claim_hits),
-                len(abstract_hits),
-                len(merged_hits),
-                bool(matched),
-            )
+                results.append(completed_result)
+                if on_case_completed:
+                    on_case_completed(completed_result)
+                logger.info(
+                    "Phase[Case] %s completed | claim_hits=%s | abstract_hits=%s | merged=%s | hit=%s",
+                    context.case_id,
+                    len(claim_hits),
+                    len(abstract_hits),
+                    len(merged_hits),
+                    bool(matched),
+                )
+            except Exception as exc:
+                logger.error("Case %s failed: %s", context.case_id, exc)
+                fail_result = CaseResult(
+                    case_id=context.case_id,
+                    syutugan=context.syutugan,
+                    ipc_prefix=context.ipc_prefix,
+                    counts=counts,
+                    hit=False,
+                    claim_query_stats=[f"error:{exc}"],
+                    abstract_query_stats=[f"error:{exc}"],
+                    ax_in_ipc_filtered=ax_in_filtered,
+                    ax_in_sorted=ax_in_limited,
+                )
+                results.append(fail_result)
+                if on_case_completed:
+                    on_case_completed(fail_result)
         return results
 
     @staticmethod
