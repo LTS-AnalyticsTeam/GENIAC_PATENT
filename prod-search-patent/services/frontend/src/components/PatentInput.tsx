@@ -116,6 +116,27 @@ const PatentInput: React.FC = () => {
     totalCount: number;
     pipelineStats: Record<string, unknown>;
   } | null>(null);
+  // ベクトル検索結果モーダル用state
+  const [showVectorListModal, setShowVectorListModal] = useState(false);
+  const [vectorListData, setVectorListData] = useState<{
+    jobId: string;
+    topPatentIds: string[];
+    uniqueHits?: number;
+    generatedQueries?: string[];
+    hitsPerQuery?: number[];
+  } | null>(null);
+  // Graph検索結果モーダル用state
+  const [showGraphListModal, setShowGraphListModal] = useState(false);
+  const [graphListData, setGraphListData] = useState<{
+    jobId: string;
+    results: Array<{
+      patent_id: string;
+      title?: string;
+      graph_score?: number;
+      vector_score?: number;
+    }>;
+    totalCount?: number;
+  } | null>(null);
 
   // キーワード検索結果を取得してモーダルを表示
   const handleShowPatentList = async (jobId: string) => {
@@ -137,6 +158,120 @@ const PatentInput: React.FC = () => {
       console.error("Failed to fetch keyword search result", err);
       alert("キーワード検索結果の取得に失敗しました");
     }
+  };
+
+  const readStageDetail = (
+    detail: StageDetail | undefined,
+    stageId: string
+  ): Record<string, unknown> | undefined => {
+    return (detail?.stages?.[stageId] as Record<string, unknown>) ?? undefined;
+  };
+
+  const handleShowVectorList = (jobId: string, detail?: StageDetail) => {
+    const stageDetail = readStageDetail(detail, "vector_search");
+    if (!stageDetail) {
+      alert("ベクトル検索結果がまだありません。");
+      return;
+    }
+    const topPatentIds = Array.isArray(stageDetail.vector_patent_ids)
+      ? (stageDetail.vector_patent_ids as unknown[]).map(String)
+      : Array.isArray(stageDetail.top_patent_ids)
+      ? (stageDetail.top_patent_ids as unknown[]).map(String)
+      : [];
+    const generatedQueries = Array.isArray(stageDetail.generated_queries)
+      ? (stageDetail.generated_queries as unknown[]).map(String)
+      : undefined;
+    const hitsPerQuery = Array.isArray(stageDetail.hits_per_query)
+      ? (stageDetail.hits_per_query as unknown[]).map((n) =>
+          typeof n === "number" ? n : Number(n)
+        )
+      : undefined;
+
+    setVectorListData({
+      jobId,
+      topPatentIds,
+      uniqueHits:
+        typeof stageDetail.unique_hits === "number"
+          ? stageDetail.unique_hits
+          : undefined,
+      generatedQueries,
+      hitsPerQuery,
+    });
+    setShowVectorListModal(true);
+  };
+
+  const handleShowGraphList = (
+    jobId: string,
+    detail?: StageDetail,
+    resultPayload?: JobResultPayload
+  ) => {
+    const stageDetail = readStageDetail(detail, "graph_rag");
+    const fromStage = Array.isArray(stageDetail?.graph_patent_results)
+      ? (stageDetail?.graph_patent_results as Array<Record<string, unknown>>).map(
+          (item) => ({
+            patent_id: String(item.patent_id ?? item.patentId ?? ""),
+            title: typeof item.title === "string" ? item.title : undefined,
+            graph_score:
+              typeof item.graph_score === "number"
+                ? item.graph_score
+                : undefined,
+            vector_score:
+              typeof item.vector_score === "number"
+                ? item.vector_score
+                : undefined,
+          })
+        )
+      : Array.isArray(stageDetail?.graph_top_results)
+      ? (stageDetail?.graph_top_results as Array<Record<string, unknown>>).map(
+          (item) => ({
+            patent_id: String(item.patent_id ?? item.patentId ?? ""),
+            title: typeof item.title === "string" ? item.title : undefined,
+            graph_score:
+              typeof item.graph_score === "number"
+                ? item.graph_score
+                : undefined,
+            vector_score:
+              typeof item.vector_score === "number"
+                ? item.vector_score
+                : undefined,
+          })
+        )
+      : null;
+
+    const fromResults =
+      resultPayload && Array.isArray(resultPayload.results)
+        ? resultPayload.results.map((item) => ({
+            patent_id: String(item.patent_id),
+            title:
+              typeof (item as Record<string, unknown>).title === "string"
+                ? ((item as Record<string, unknown>).title as string)
+                : undefined,
+            graph_score:
+              typeof (item as Record<string, unknown>).graph_score === "number"
+                ? ((item as Record<string, unknown>).graph_score as number)
+                : undefined,
+            vector_score:
+              typeof (item as Record<string, unknown>).vector_score === "number"
+                ? ((item as Record<string, unknown>).vector_score as number)
+                : undefined,
+          }))
+        : null;
+
+    const results = fromStage ?? fromResults ?? [];
+    if (results.length === 0) {
+      alert("Graph検索結果がまだありません。");
+      return;
+    }
+
+    setGraphListData({
+      jobId,
+      results,
+      totalCount:
+        typeof stageDetail?.graph_results === "number"
+          ? stageDetail.graph_results
+          : results.length,
+    });
+    setShowGraphListModal(true);
   };
 
   // 特許を追加（最大5件）
@@ -529,6 +664,12 @@ const PatentInput: React.FC = () => {
                   detail={job.detail}
                   onShowPatentList={() => handleShowPatentList(job.jobId)}
                   keywordSearchCount={job.candidateCount}
+                  onShowVectorList={() =>
+                    handleShowVectorList(job.jobId, job.detail)
+                  }
+                  onShowGraphList={() =>
+                    handleShowGraphList(job.jobId, job.detail, job.resultPayload)
+                  }
                 />
                 <div className="job-meta">
                   {job.detail?.current_stage && (
@@ -695,6 +836,332 @@ const PatentInput: React.FC = () => {
                       </tr>
                     )
                   )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ベクトル検索結果モーダル */}
+      {showVectorListModal && vectorListData && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowVectorListModal(false)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="modal-content"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+            style={{
+              backgroundColor: "white",
+              borderRadius: "8px",
+              padding: "24px",
+              maxWidth: "760px",
+              width: "95%",
+              maxHeight: "80vh",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <div>
+                <h3 style={{ margin: 0, fontSize: "18px" }}>
+                  ベクトル検索結果{" "}
+                  ({(vectorListData.uniqueHits ?? vectorListData.topPatentIds.length).toLocaleString()}
+                  件)
+                </h3>
+                <p style={{ margin: "4px 0", color: "#6b7280", fontSize: "12px" }}>
+                  ジョブID: {vectorListData.jobId}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowVectorListModal(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "4px",
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "8px",
+                marginBottom: "12px",
+                fontSize: "12px",
+                color: "#444",
+              }}
+            >
+              <div>
+                <strong>ユニークヒット数</strong>
+                <div>{vectorListData.uniqueHits ?? vectorListData.topPatentIds.length} 件</div>
+              </div>
+              {vectorListData.generatedQueries && (
+                <div>
+                  <strong>生成クエリ</strong>
+                  <div>{vectorListData.generatedQueries.length} 件</div>
+                </div>
+              )}
+            </div>
+
+            {vectorListData.generatedQueries && (
+              <div
+                style={{
+                  marginBottom: "12px",
+                  padding: "8px",
+                  background: "#f9fafb",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: "4px",
+                  fontSize: "12px",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: "4px" }}>
+                  生成クエリ一覧
+                </strong>
+                <ul style={{ paddingLeft: "16px", margin: 0 }}>
+                  {vectorListData.generatedQueries.map((q, idx) => (
+                    <li key={`${q}-${idx}`} style={{ marginBottom: "4px" }}>
+                      {idx + 1}. {q}
+                      {vectorListData.hitsPerQuery &&
+                        typeof vectorListData.hitsPerQuery[idx] === "number" && (
+                          <span style={{ color: "#6b7280", marginLeft: "6px" }}>
+                            ({vectorListData.hitsPerQuery[idx]}件ヒット)
+                          </span>
+                        )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                border: "1px solid #e5e7eb",
+                borderRadius: "4px",
+                padding: "8px",
+                fontFamily: "monospace",
+                fontSize: "12px",
+              }}
+            >
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr
+                    style={{
+                      position: "sticky",
+                      top: 0,
+                      backgroundColor: "#f9fafb",
+                    }}
+                  >
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      順位
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      特許ID
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {vectorListData.topPatentIds.map(
+                    (patentId: string, index: number) => (
+                      <tr
+                        key={`${patentId}-${index}`}
+                        style={{ borderBottom: "1px solid #f3f4f6" }}
+                      >
+                        <td style={{ padding: "4px", color: "#6b7280" }}>
+                          {index + 1}
+                        </td>
+                        <td style={{ padding: "4px" }}>{patentId}</td>
+                      </tr>
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Graph検索結果モーダル */}
+      {showGraphListModal && graphListData && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowGraphListModal(false)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="modal-content"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+            style={{
+              backgroundColor: "white",
+              borderRadius: "8px",
+              padding: "24px",
+              maxWidth: "860px",
+              width: "95%",
+              maxHeight: "80vh",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <div>
+                <h3 style={{ margin: 0, fontSize: "18px" }}>
+                  Graph検索結果 (
+                  {(graphListData.totalCount ?? graphListData.results.length).toLocaleString()}
+                  件)
+                </h3>
+                <p style={{ margin: "4px 0", color: "#6b7280", fontSize: "12px" }}>
+                  ジョブID: {graphListData.jobId}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowGraphListModal(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "4px",
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                border: "1px solid #e5e7eb",
+                borderRadius: "4px",
+                padding: "8px",
+                fontFamily: "monospace",
+                fontSize: "12px",
+              }}
+            >
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr
+                    style={{
+                      position: "sticky",
+                      top: 0,
+                      backgroundColor: "#f9fafb",
+                    }}
+                  >
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      順位
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      特許ID
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      GraphScore
+                    </th>
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "left",
+                        borderBottom: "1px solid #e5e7eb",
+                      }}
+                    >
+                      VectorScore
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {graphListData.results.map((item, index) => (
+                    <tr
+                      key={`${item.patent_id}-${index}`}
+                      style={{ borderBottom: "1px solid #f3f4f6" }}
+                    >
+                      <td style={{ padding: "4px", color: "#6b7280" }}>
+                        {index + 1}
+                      </td>
+                      <td style={{ padding: "4px" }}>{item.patent_id}</td>
+                      <td style={{ padding: "4px" }}>
+                        {item.graph_score !== undefined
+                          ? item.graph_score.toFixed(3)
+                          : "-"}
+                      </td>
+                      <td style={{ padding: "4px" }}>
+                        {item.vector_score !== undefined
+                          ? item.vector_score.toFixed(3)
+                          : "-"}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

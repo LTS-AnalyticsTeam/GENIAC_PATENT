@@ -50,7 +50,7 @@ export type AnalysisResponse = {
 
 export type StageDetail = {
   current_stage?: string;
-  stages?: Record<string, Record<string, string>>;
+  stages?: Record<string, Record<string, unknown>>;
   completed_stages?: string[];
   candidate_count?: number;
   narrowed_count?: number;
