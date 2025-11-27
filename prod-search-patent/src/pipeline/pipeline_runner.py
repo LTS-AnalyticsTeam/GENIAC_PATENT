@@ -535,6 +535,8 @@ async def run_pipeline(
             "hits_per_query": hits_per_query,
             "unique_hits": len(vector_docs),
             "top_patent_ids": [doc.get("patent_id") for doc in vector_docs[:10]],
+            # 全ヒットを UI で一覧表示できるように保持
+            "vector_patent_ids": [doc.get("patent_id") for doc in vector_docs],
         },
     )
     tracker.complete("vector_search")
@@ -650,6 +652,33 @@ async def run_pipeline(
     rag = GraphRAGService(config)
     top_results = rag.top_k([doc.get("patent_id") for doc in stage2_docs], alpha_id=alpha_id or "", k=30)
     top_results = _deduplicate_by_patent_id(top_results)
+    tracker.update(
+        "graph_rag",
+        {
+            "graph_results": len(top_results),
+            "graph_top_patent_ids": [entry.get("patent_id") for entry in top_results[:10]],
+            "graph_top_results": [
+                {
+                    "patent_id": entry.get("patent_id"),
+                    "title": entry.get("title"),
+                    "graph_score": entry.get("graph_score"),
+                    "vector_score": entry.get("vector_score"),
+                }
+                for entry in top_results[:10]
+            ],
+            # 全件（k件）を UI で一覧表示できるように保持
+            "graph_patent_results": [
+                {
+                    "patent_id": entry.get("patent_id"),
+                    "title": entry.get("title"),
+                    "graph_score": entry.get("graph_score"),
+                    "vector_score": entry.get("vector_score"),
+                }
+                for entry in top_results
+                if entry.get("patent_id")
+            ],
+        },
+    )
     rag.close()
     stage2.close()
     tracker.complete("graph_rag")

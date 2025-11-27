@@ -88,6 +88,7 @@ class AnalysisService:
         source_doc = from_patent_json_v1(alpha_json)
         claims_2_to_5 = self._extract_claims_2_to_5(alpha_json)
         alpha = self._build_alpha_info(alpha_json.get("patent_id", "alpha"), source_doc, claims_2_to_5, alpha_json.get("title"))
+        candidates_slice = list(candidates_json[:30])
 
         # なるべく否定根拠の強いものを優先しつつ、必ず各カテゴリで1件以上返す。
         def score_assessment(assess: AssessmentCandidate, consider_inventive: bool) -> float:
@@ -96,11 +97,41 @@ class AnalysisService:
             evidence_total = sum(len(a.evidence) for a in assess.assessments)
             return nov_denied * 2.0 + inv_denied * 1.5 + evidence_total * 0.1
 
+        def build_placeholder_assessments(target_claims: Sequence[Tuple[int, str, bool]]) -> List[ClaimAssessment]:
+            assessments: List[ClaimAssessment] = []
+            for num, _text, include_inventive in target_claims:
+                assessments.append(
+                    ClaimAssessment(
+                        claim_no=num,
+                        novelty="uncertain",
+                        inventive_step="uncertain" if include_inventive else None,
+                        evidence=[],
+                        examiner_hints=["LLM evaluation unavailable; placeholder"],
+                    )
+                )
+            return assessments
+
+        def build_placeholder_candidate(candidate_json: Dict[str, Any], target_claims: Sequence[Tuple[int, str, bool]]) -> AssessmentCandidate | None:
+            cand_doc = from_patent_json_v1(candidate_json)
+            doc_id = candidate_json.get("patent_id") or cand_doc.pub_number or cand_doc.title
+            if not doc_id:
+                return None
+            return AssessmentCandidate(
+                doc_id=str(doc_id),
+                title=cand_doc.title or "先行例",
+                pub_number=cand_doc.pub_number or candidate_json.get("patent_id") or "UNKNOWN",
+                score=0.0,
+                assessments=build_placeholder_assessments(target_claims),
+                ipc=self._extract_ipc_codes(candidate_json) or ["UNKNOWN"],
+                summary=candidate_json.get("summary") or candidate_json.get("abstract"),
+                source_url=None,
+            )
+
         claim1_pool: List[Dict[str, Any]] = []
         rest_pool: List[Dict[str, Any]] = []
-        MAX_EVALS = min(30, len(candidates_json))  # レート制限を避けるため評価上限を設定（50k TPM想定）
+        MAX_EVALS = min(30, len(candidates_slice))  # レート制限を避けるため評価上限を設定（50k TPM想定）
 
-        for idx, candidate_json in enumerate(candidates_json[:MAX_EVALS]):
+        for idx, candidate_json in enumerate(candidates_slice[:MAX_EVALS]):
             cand_doc = from_patent_json_v1(candidate_json)
 
             # 請求項1
@@ -183,6 +214,34 @@ class AnalysisService:
             rest_selected = pick_top(rest_pool, 5, require_denied=True, used_ids=used_ids)
             if not rest_selected and rest_pool:
                 rest_selected = pick_top(rest_pool, 1, require_denied=False, used_ids=used_ids)
+
+        # フォールバック: LLM評価が得られなかった場合でもAx/Ayを最低1件ずつ返す
+        if not claim1_selected and candidates_slice:
+            placeholder = None
+            for cand_json in candidates_slice:
+                candidate = build_placeholder_candidate(cand_json, [(1, source_doc.claim1, False)])
+                if candidate and candidate.doc_id not in used_ids:
+                    placeholder = candidate
+                    break
+            if not placeholder:
+                placeholder = build_placeholder_candidate(candidates_slice[0], [(1, source_doc.claim1, False)])
+            if placeholder:
+                used_ids.add(placeholder.doc_id)
+                claim1_selected = [placeholder]
+
+        if claims_2_to_5 and not rest_selected and candidates_slice:
+            target_claims = [(c.get("num") or 0, c.get("text", ""), True) for c in claims_2_to_5 if c]
+            placeholder = None
+            for cand_json in candidates_slice:
+                candidate = build_placeholder_candidate(cand_json, target_claims)
+                if candidate and candidate.doc_id not in used_ids:
+                    placeholder = candidate
+                    break
+            if not placeholder:
+                placeholder = build_placeholder_candidate(candidates_slice[0], target_claims)
+            if placeholder:
+                used_ids.add(placeholder.doc_id)
+                rest_selected = [placeholder]
 
         limits = RunLimits(max_total=len(claim1_selected) + len(rest_selected), Ay_min=len(rest_selected))
         return AnalysisResponse(
