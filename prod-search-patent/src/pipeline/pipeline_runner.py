@@ -23,6 +23,7 @@ from .patent_search_pipeline import run_patent_search_from_json
 from .query_generation import QueryGenerator
 from .stage2_indexer import Stage2Indexer
 from .trimming import sort_and_trim
+from .web_search_service import search_web_references
 
 logger = logging.getLogger(__name__)
 QUERY_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "query"
@@ -683,22 +684,161 @@ async def run_pipeline(
     stage2.close()
     tracker.complete("graph_rag")
 
+    # Stage 9: Web search for additional references
+    tracker.start("web_search")
+    web_results: List[Dict] = []
+    claim1_text = parsed.get("claim1", "")
+
+    if claim1_text:
+        try:
+            import os
+            azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+            web_results = await search_web_references(claim1_text, azure_deployment)
+            logger.info(f"Job %s: Web search returned %d results", job_id, len(web_results))
+        except Exception as e:
+            logger.warning(f"Job %s: Web search failed: %s", job_id, e)
+            web_results = []
+    else:
+        logger.warning(f"Job %s: No claim1 text available for web search", job_id)
+
+    tracker.update("web_search", {
+        "web_results_count": len(web_results),
+        "web_result_ids": [r.get("patent_id") for r in web_results[:5]]
+    })
+    tracker.complete("web_search")
+
+    # Stage 10: Merge and select final 10 candidates from 30 patents + web results
+    tracker.start("final_selection")
+    combined_results = list(top_results) + list(web_results)
+    logger.info(f"Job %s: Combined results: {len(top_results)} patents + {len(web_results)} web = {len(combined_results)} total", job_id)
+
+    # If combined results <= 10, use all
+    if len(combined_results) <= 10:
+        final_candidates = combined_results
+        logger.info(f"Job %s: Using all {len(final_candidates)} combined results (<=10)", job_id)
+    else:
+        # Use LLM to select top 10 from combined results
+        try:
+            import os
+            from openai import AzureOpenAI
+            import json as json_module
+
+            client = AzureOpenAI(
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
+            )
+            deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+
+            # Prepare candidate list for LLM
+            candidates_for_llm = []
+            for idx, candidate in enumerate(combined_results):
+                candidates_for_llm.append({
+                    "index": idx,
+                    "patent_id": candidate.get("patent_id"),
+                    "title": candidate.get("title", ""),
+                    "summary": (candidate.get("summary") or "")[:500],
+                    "is_web_result": candidate.get("is_web_result", False),
+                    "source": candidate.get("source", "patent"),
+                })
+
+            user_prompt = f"""あなたは特許の新規性・進歩性を判断する専門家です。
+
+【タスク】
+以下の特許出願に対して、最も関連性の高い先行技術候補を10件選択してください。
+
+【出願内容】
+タイトル: {parsed.get("title", "")}
+要約: {parsed.get("summary", "")[:500]}
+請求項1: {claim1_text[:500]}
+
+【候補一覧】
+{json_module.dumps(candidates_for_llm, ensure_ascii=False, indent=2)}
+
+【選択基準】
+1. 技術的な関連性が高いもの
+2. 新規性・進歩性の判断に重要なもの
+3. 特許データベースとWeb検索結果をバランスよく含める（可能であれば）
+
+【出力形式】
+以下のJSON形式で、選択した候補のindexリストを返してください：
+{{"selected_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}}
+
+必ず有効なJSONのみを出力し、余計なテキストは含めないでください。
+"""
+
+            resp = client.chat.completions.create(
+                model=deployment,
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_completion_tokens=500,
+            )
+
+            content = resp.choices[0].message.content or ""
+            # Extract JSON from response
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                json_text = content[start:end+1]
+                data = json_module.loads(json_text)
+                selected_indices = data.get("selected_indices", [])
+
+                # Validate and select
+                final_candidates = []
+                for idx in selected_indices[:10]:
+                    if 0 <= idx < len(combined_results):
+                        final_candidates.append(combined_results[idx])
+
+                if len(final_candidates) < 10:
+                    # Fill with remaining candidates if LLM didn't select enough
+                    for idx, candidate in enumerate(combined_results):
+                        if idx not in selected_indices and len(final_candidates) < 10:
+                            final_candidates.append(candidate)
+
+                logger.info(f"Job %s: LLM selected {len(final_candidates)} final candidates", job_id)
+            else:
+                raise ValueError("No valid JSON found in LLM response")
+
+        except Exception as e:
+            logger.warning(f"Job %s: Final selection with LLM failed: %s, using simple selection", job_id, e)
+            # Fallback: simple selection (first 10 from combined)
+            final_candidates = combined_results[:10]
+
+    tracker.update("final_selection", {
+        "combined_count": len(combined_results),
+        "final_count": len(final_candidates),
+        "patent_count": sum(1 for c in final_candidates if not c.get("is_web_result")),
+        "web_count": sum(1 for c in final_candidates if c.get("is_web_result")),
+    })
+    tracker.complete("final_selection")
+
+    # Use final_candidates for analysis instead of top_results
+    top_results = final_candidates
+
     tracker.start("analysis", {"analysis_candidates": len(top_results)})
     analysis_service = AnalysisService()
     analysis_payload: Dict | None = None
     missing_candidates: List[str] = []
 
     if top_results:
+        # Separate patent results and web results
+        patent_results = [entry for entry in top_results if not entry.get("is_web_result")]
+        web_only_results = [entry for entry in top_results if entry.get("is_web_result")]
+
+        # Fetch Cosmos data only for patent results
         analysis_cosmos = CosmosPatentClient(config)
         try:
             candidate_docs_map = analysis_cosmos.fetch_by_patent_ids(
-                [entry["patent_id"] for entry in top_results if entry.get("patent_id")]
+                [entry["patent_id"] for entry in patent_results if entry.get("patent_id")]
             )
         finally:
             analysis_cosmos.close()
 
         ordered_candidates: List[Dict] = []
-        for entry in top_results:
+
+        # Process patent results (need Cosmos data)
+        for entry in patent_results:
             pid = entry.get("patent_id")
             if not pid:
                 continue
@@ -707,6 +847,25 @@ async def run_pipeline(
                 ordered_candidates.append(candidate_doc)
             else:
                 missing_candidates.append(pid)
+
+        # For web results, create simplified candidate_json
+        for entry in web_only_results:
+            pid = entry.get("patent_id")
+            if not pid:
+                continue
+
+            # Create a minimal candidate_json for web results
+            web_candidate_json = {
+                "bibliographic": {
+                    "invention_title": entry.get("title", ""),
+                    "publication": {"doc_number": pid},
+                },
+                "abstract": entry.get("summary", ""),
+                "claims": [],
+                "source_url": entry.get("source_url", ""),
+                "is_web_result": True,
+            }
+            ordered_candidates.append(web_candidate_json)
 
         tracker.update(
             "analysis",
@@ -748,6 +907,7 @@ async def run_pipeline(
     final_payload = {
         "results": top_results,
         "keyword_search_results": narrowed_patent_ids,
+        "web_search_results": [r.get("patent_id") for r in web_results],
         "pipeline_stats": {
             "trimmed": len(trimmed_docs),
             "stage1_indexed": success,
@@ -756,12 +916,11 @@ async def run_pipeline(
             "stage1_embedded": len(docs_to_embed),
             "vector_search_results": len(vector_docs),
             "vector_queries": len(generated_queries),
+            "web_search_results": len(web_results),
             "analysis_candidates": len(top_results),
             "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
             "stage2_keyword_filter_results": len(narrowed_patent_ids),
             "analysis_completed": 1 if analysis_payload else 0,
-            "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
-            "stage2_keyword_filter_results": len(narrowed_patent_ids),
         },
     }
 

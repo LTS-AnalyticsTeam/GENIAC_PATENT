@@ -266,14 +266,22 @@ const BatchResults: React.FC = () => {
             ),
           }
         : null;
+    const isWeb = Boolean(candidate.is_web_result || candidate.source_url);
     return (
       <div className="candidate-card" key={candidate.doc_id}>
         <div className="candidate-header">
           <div>
             <div className="badge primary">{label}</div>
+            {isWeb && <div className="badge badge-web">Web検索結果</div>}
             <h3>{candidate.title}</h3>
             <div className="candidate-meta">
-              <span>特許番号: {candidate.pub_number ?? "不明"}</span>
+              {isWeb && candidate.source_url ? (
+                <a href={candidate.source_url} target="_blank" rel="noopener noreferrer">
+                  参照URL: {candidate.source_url}
+                </a>
+              ) : (
+                <span>特許番号: {candidate.pub_number ?? "不明"}</span>
+              )}
             </div>
           </div>
         </div>

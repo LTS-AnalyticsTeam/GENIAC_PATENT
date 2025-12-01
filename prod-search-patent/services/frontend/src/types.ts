@@ -26,6 +26,8 @@ export type AssessmentCandidate = {
   ipc?: string[];
   source_url?: string;
   year?: number | null;
+  is_web_result?: boolean;
+  source?: string;
 };
 
 export type AlphaInfo = {
