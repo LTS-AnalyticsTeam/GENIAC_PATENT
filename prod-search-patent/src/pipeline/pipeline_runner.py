@@ -229,14 +229,17 @@ def _build_alpha_source_json(parsed: Dict[str, Any]) -> Dict[str, Any]:
     if not claim_entries and parsed.get("claim1"):
         claim_entries.append({"text": parsed.get("claim1")})
 
+    # Ensure patent_id is properly set
+    patent_id = parsed.get("patent_id") or ""
+
     return {
         "bibliographic": {
-            "title": parsed.get("title"),
-            "publication": {"doc_number": parsed.get("patent_id")},
+            "title": parsed.get("title") or "",
+            "publication": {"doc_number": patent_id},
         },
-        "abstract": parsed.get("summary"),
+        "abstract": parsed.get("summary") or "",
         "claims": claim_entries,
-        "description": None,
+        "description": parsed.get("description"),
     }
 
 
