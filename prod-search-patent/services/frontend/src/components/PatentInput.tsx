@@ -100,6 +100,21 @@ const persistJobs = (jobList: JobInfo[]) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 };
 
+// 特許番号を統一フォーマット（JP{number}A）に変換する関数
+const formatPatentNumber = (patentId: string): string => {
+  if (!patentId) return "";
+  // 既にJPで始まりAで終わる場合はそのまま返す
+  if (patentId.startsWith("JP") && patentId.endsWith("A")) {
+    return patentId;
+  }
+  // 数字のみの場合はJP{number}Aの形式にする
+  if (/^\d+$/.test(patentId)) {
+    return `JP${patentId}A`;
+  }
+  // その他の場合はそのまま返す（WO番号など）
+  return patentId;
+};
+
 const PatentInput: React.FC = () => {
   const [patents, setPatents] = useState<PatentSlot[]>([
     { id: "patent_1", file: null },
@@ -848,7 +863,7 @@ const PatentInput: React.FC = () => {
                           <td style={{ padding: "4px", color: "#6b7280" }}>
                             {index + 1}
                           </td>
-                          <td style={{ padding: "4px" }}>JP{result.doc_number}A</td>
+                          <td style={{ padding: "4px" }}>{formatPatentNumber(result.doc_number)}</td>
                           <td style={{ padding: "4px", textAlign: "right", fontWeight: "500" }}>
                             {result.score.toFixed(1)}
                           </td>
@@ -865,7 +880,7 @@ const PatentInput: React.FC = () => {
                           <td style={{ padding: "4px", color: "#6b7280" }}>
                             {index + 1}
                           </td>
-                          <td style={{ padding: "4px" }}>JP{patentId}A</td>
+                          <td style={{ padding: "4px" }}>{formatPatentNumber(patentId)}</td>
                           <td style={{ padding: "4px", textAlign: "right", color: "#9ca3af" }}>
                             -
                           </td>
@@ -1045,7 +1060,7 @@ const PatentInput: React.FC = () => {
                         <td style={{ padding: "4px", color: "#6b7280" }}>
                           {index + 1}
                         </td>
-                        <td style={{ padding: "4px" }}>{patentId}</td>
+                        <td style={{ padding: "4px" }}>{formatPatentNumber(patentId)}</td>
                       </tr>
                     )
                   )}
@@ -1186,7 +1201,7 @@ const PatentInput: React.FC = () => {
                       <td style={{ padding: "4px", color: "#6b7280" }}>
                         {index + 1}
                       </td>
-                      <td style={{ padding: "4px" }}>{item.patent_id}</td>
+                      <td style={{ padding: "4px" }}>{formatPatentNumber(item.patent_id)}</td>
                       <td style={{ padding: "4px" }}>
                         {item.graph_score !== undefined
                           ? item.graph_score.toFixed(3)
