@@ -278,9 +278,9 @@ const PatentInput: React.FC = () => {
     setShowGraphListModal(true);
   };
 
-  // 特許を追加（最大5件）
+  // 特許を追加（最大30件）
   const addPatent = () => {
-    if (patents.length < 5) {
+    if (patents.length < 30) {
       setPatents([
         ...patents,
         { id: `patent_${patents.length + 1}`, file: null },
@@ -558,7 +558,7 @@ const PatentInput: React.FC = () => {
       <div className="patents-section">
         <h3>
           <FileText size={24} />
-          出願特許（最大5件）
+          出願特許（最大30件）
         </h3>
 
         {patents.map((patent, index) => (
@@ -604,7 +604,7 @@ const PatentInput: React.FC = () => {
           </div>
         ))}
 
-        {patents.length < 5 && (
+        {patents.length < 30 && (
           <button className="add-patent-btn" onClick={addPatent}>
             <Plus size={20} />
             特許を追加
