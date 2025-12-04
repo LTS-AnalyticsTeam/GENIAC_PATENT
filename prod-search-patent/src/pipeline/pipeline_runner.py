@@ -23,6 +23,7 @@ from .patent_search_pipeline import run_patent_search_from_json
 from .query_generation import QueryGenerator
 from .stage2_indexer import Stage2Indexer
 from .trimming import sort_and_trim
+from .web_search_service import search_web_references
 
 logger = logging.getLogger(__name__)
 QUERY_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "query"
@@ -228,14 +229,17 @@ def _build_alpha_source_json(parsed: Dict[str, Any]) -> Dict[str, Any]:
     if not claim_entries and parsed.get("claim1"):
         claim_entries.append({"text": parsed.get("claim1")})
 
+    # Ensure patent_id is properly set
+    patent_id = parsed.get("patent_id") or ""
+
     return {
         "bibliographic": {
-            "title": parsed.get("title"),
-            "publication": {"doc_number": parsed.get("patent_id")},
+            "title": parsed.get("title") or "",
+            "publication": {"doc_number": patent_id},
         },
-        "abstract": parsed.get("summary"),
+        "abstract": parsed.get("summary") or "",
         "claims": claim_entries,
-        "description": None,
+        "description": parsed.get("description"),
     }
 
 
@@ -683,22 +687,65 @@ async def run_pipeline(
     stage2.close()
     tracker.complete("graph_rag")
 
-    tracker.start("analysis", {"analysis_candidates": len(top_results)})
+    # Stage 9: Web search for additional references
+    tracker.start("web_search")
+    web_results: List[Dict] = []
+    claim1_text = parsed.get("claim1", "")
+
+    if claim1_text:
+        try:
+            import os
+            azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+            web_results = await search_web_references(claim1_text, azure_deployment)
+            logger.info(f"Job %s: Web search returned %d results", job_id, len(web_results))
+        except Exception as e:
+            logger.warning(f"Job %s: Web search failed: %s", job_id, e)
+            web_results = []
+    else:
+        logger.warning(f"Job %s: No claim1 text available for web search", job_id)
+
+    tracker.update("web_search", {
+        "web_results_count": len(web_results),
+        "web_result_ids": [r.get("patent_id") for r in web_results[:5]]
+    })
+    tracker.complete("web_search")
+
+    # Stage 10: Merge all candidates (30 patents + web results) for analysis
+    tracker.start("merge_candidates")
+    combined_results = list(top_results) + list(web_results)
+    logger.info(f"Job %s: Combined results: {len(top_results)} patents + {len(web_results)} web = {len(combined_results)} total", job_id)
+
+    tracker.update("merge_candidates", {
+        "combined_count": len(combined_results),
+        "patent_count": len(top_results),
+        "web_count": len(web_results),
+    })
+    tracker.complete("merge_candidates")
+
+    # Stage 11: Analyze ALL combined candidates (30+ candidates)
+    tracker.start("analysis", {"analysis_candidates": len(combined_results)})
     analysis_service = AnalysisService()
-    analysis_payload: Dict | None = None
+    all_analysis_results: List[Dict] = []  # 全候補の分析結果を保存
     missing_candidates: List[str] = []
 
-    if top_results:
+    if combined_results:
+        # Separate patent results and web results from ALL combined results
+        patent_results = [entry for entry in combined_results if not entry.get("is_web_result")]
+        web_only_results = [entry for entry in combined_results if entry.get("is_web_result")]
+
+        # Fetch Cosmos data only for patent results
         analysis_cosmos = CosmosPatentClient(config)
         try:
             candidate_docs_map = analysis_cosmos.fetch_by_patent_ids(
-                [entry["patent_id"] for entry in top_results if entry.get("patent_id")]
+                [entry["patent_id"] for entry in patent_results if entry.get("patent_id")]
             )
         finally:
             analysis_cosmos.close()
 
         ordered_candidates: List[Dict] = []
-        for entry in top_results:
+
+        # Process patent results (need Cosmos data)
+        for entry in patent_results:
             pid = entry.get("patent_id")
             if not pid:
                 continue
@@ -707,6 +754,26 @@ async def run_pipeline(
                 ordered_candidates.append(candidate_doc)
             else:
                 missing_candidates.append(pid)
+
+        # For web results, create simplified candidate_json
+        for entry in web_only_results:
+            pid = entry.get("patent_id")
+            if not pid:
+                continue
+
+            # Create a minimal candidate_json for web results
+            web_candidate_json = {
+                "bibliographic": {
+                    "invention_title": entry.get("title", ""),
+                    "publication": {"doc_number": pid},
+                },
+                "abstract": entry.get("summary", ""),
+                "claims": [],
+                "source_url": entry.get("source_url", ""),
+                "is_web_result": True,
+                "page_content": entry.get("page_content", ""),  # URL本文内容を追加
+            }
+            ordered_candidates.append(web_candidate_json)
 
         tracker.update(
             "analysis",
@@ -723,17 +790,23 @@ async def run_pipeline(
                     candidates_json=ordered_candidates,
                 )
                 analysis_payload = analysis_response.model_dump()
+
+                # 分析結果を各候補に紐付け
+                for entry in combined_results:
+                    entry["analysis_status"] = "completed"
+                    entry["analysis"] = analysis_payload
+
             except Exception as exc:  # pragma: no cover
                 logger.warning("Analysis failed: %s", exc)
                 analysis_payload = None
-
-    for entry in top_results:
-        if analysis_payload:
-            entry["analysis_status"] = "completed"
-            entry["analysis"] = analysis_payload
+                for entry in combined_results:
+                    entry.setdefault("analysis_status", "failed")
+                    entry.setdefault("analysis_error", "解析結果を生成できませんでした")
         else:
-            entry.setdefault("analysis_status", "failed")
-            entry.setdefault("analysis_error", "解析結果を生成できませんでした")
+            analysis_payload = None
+            for entry in combined_results:
+                entry.setdefault("analysis_status", "failed")
+                entry.setdefault("analysis_error", "候補データが取得できませんでした")
 
     if missing_candidates:
         tracker.update(
@@ -745,9 +818,56 @@ async def run_pipeline(
 
     tracker.complete("analysis")
 
+    # Stage 12: Select top 10 from analyzed candidates using LLM
+    tracker.start("final_selection")
+
+    # AnalysisServiceを使って候補選択
+    alpha_info = {
+        "title": parsed.get("title", ""),
+        "summary": parsed.get("summary", ""),
+        "claim1": claim1_text,
+    }
+
+    try:
+        final_candidates = await analysis_service.select_top_candidates(
+            combined_candidates=combined_results,
+            analysis_result=analysis_payload,
+            alpha_info=alpha_info,
+            top_n=10,
+        )
+        logger.info(f"Job %s: Selected {len(final_candidates)} final candidates from {len(combined_results)} analyzed", job_id)
+    except Exception as e:
+        logger.warning(f"Job %s: Candidate selection failed: %s, using all candidates", job_id, e)
+        final_candidates = combined_results[:10] if len(combined_results) > 10 else combined_results
+
+    tracker.update("final_selection", {
+        "analyzed_count": len(combined_results),
+        "final_count": len(final_candidates),
+        "patent_count": sum(1 for c in final_candidates if not c.get("is_web_result")),
+        "web_count": sum(1 for c in final_candidates if c.get("is_web_result")),
+    })
+    tracker.complete("final_selection")
+
+    # Prepare full web search results with title and URL
+    # Include ALL web results (not just the ones in final_candidates)
+    web_search_details = [
+        {
+            "patent_id": r.get("patent_id", ""),
+            "title": r.get("title", ""),
+            "source_url": r.get("source_url", ""),
+            "summary": r.get("summary", ""),
+        }
+        for r in web_results
+    ]
+
+    logger.info(f"Job %s: Created web_search_details with {len(web_search_details)} items", job_id)
+
     final_payload = {
-        "results": top_results,
+        "results": final_candidates,  # 選択された上位10件を返す
         "keyword_search_results": narrowed_patent_ids,
+        "search_results": search_result.get("search_results", []),
+        "web_search_results": [r.get("patent_id") for r in web_results],
+        "web_search_details": web_search_details,
         "pipeline_stats": {
             "trimmed": len(trimmed_docs),
             "stage1_indexed": success,
@@ -756,15 +876,106 @@ async def run_pipeline(
             "stage1_embedded": len(docs_to_embed),
             "vector_search_results": len(vector_docs),
             "vector_queries": len(generated_queries),
-            "analysis_candidates": len(top_results),
+            "web_search_results": len(web_results),
+            "analysis_candidates": len(combined_results),  # 分析した候補数（30+）
+            "final_candidates": len(final_candidates),  # 最終選択数（10）
             "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
             "stage2_keyword_filter_results": len(narrowed_patent_ids),
             "analysis_completed": 1 if analysis_payload else 0,
-            "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
-            "stage2_keyword_filter_results": len(narrowed_patent_ids),
         },
     }
 
     tracker.finalize(final_payload["pipeline_stats"])
     job_manager.store_result(job_id, final_payload)
     return final_payload
+
+
+async def run_test_pipeline_from_patent_id(
+    job_id: str,
+    patent_id: str,
+    job_manager: JobManager,
+    config: PipelineConfig,
+) -> Dict[str, Any]:
+    """
+    テスト用パイプライン: 特許番号からCosmosDBのJSONを取得し、既存のパイプラインを実行
+    """
+    logger.info(f"Job %s: Starting test pipeline for patent_id=%s", job_id, patent_id)
+
+    # Fetch JSON from Cosmos DB
+    cosmos_client = CosmosPatentClient(config)
+    try:
+        docs_map = cosmos_client.fetch_by_patent_ids([patent_id])
+        if not docs_map or patent_id not in docs_map:
+            raise PipelineStageError(
+                "fetching_from_cosmos",
+                f"Patent ID {patent_id} not found in Cosmos DB"
+            )
+
+        patent_json = docs_map[patent_id]
+        logger.info(f"Job %s: Successfully fetched patent JSON from Cosmos DB", job_id)
+
+        # Convert JSON to bytes for existing pipeline
+        json_bytes = json.dumps(patent_json, ensure_ascii=False).encode("utf-8")
+
+    finally:
+        cosmos_client.close()
+
+    # Run existing pipeline with the fetched JSON
+    logger.info(f"Job %s: Running standard pipeline with fetched JSON", job_id)
+    return await run_pipeline(config, job_manager, job_id, json_bytes)
+
+
+def _extract_parsed_from_cosmos_json(cosmos_json: Dict) -> Dict:
+    """CosmosDBのJSON構造からパース済みデータを抽出"""
+    bibliographic = cosmos_json.get("bibliographic", {})
+
+    # Title
+    title = ""
+    if isinstance(bibliographic.get("invention_title"), list):
+        for t in bibliographic["invention_title"]:
+            if isinstance(t, dict) and t.get("lang") == "ja":
+                title = t.get("text", "")
+                break
+    elif isinstance(bibliographic.get("invention_title"), str):
+        title = bibliographic["invention_title"]
+
+    # Summary/Abstract
+    abstract = cosmos_json.get("abstract", {})
+    summary = ""
+    if isinstance(abstract, str):
+        summary = abstract
+    elif isinstance(abstract, dict):
+        abstract_text = abstract.get("text", "")
+        if isinstance(abstract_text, list):
+            summary = " ".join([p.get("text", "") if isinstance(p, dict) else str(p) for p in abstract_text])
+        elif isinstance(abstract_text, str):
+            summary = abstract_text
+
+    # Claim1
+    claims = cosmos_json.get("claims", [])
+    claim1 = ""
+    if claims and len(claims) > 0:
+        first_claim = claims[0]
+        if isinstance(first_claim, dict):
+            claim_text = first_claim.get("text", "")
+            if isinstance(claim_text, list):
+                claim1 = " ".join([p.get("text", "") if isinstance(p, dict) else str(p) for p in claim_text])
+            else:
+                claim1 = str(claim_text)
+
+    # IPC
+    ipc_list = []
+    classification = bibliographic.get("classification", {})
+    ipc_data = classification.get("ipc", [])
+    for ipc_entry in ipc_data:
+        if isinstance(ipc_entry, dict):
+            ipc_text = ipc_entry.get("text", "")
+            if ipc_text:
+                ipc_list.append(ipc_text)
+
+    return {
+        "title": title.strip(),
+        "summary": summary.strip(),
+        "claim1": claim1.strip(),
+        "ipc": ipc_list,
+    }

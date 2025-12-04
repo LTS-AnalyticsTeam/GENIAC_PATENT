@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import "./PatentInput.css";
 import StageProgress from "./StageProgress";
-import { StageDetail } from "../types";
+import { StageDetail, SearchResultItem } from "../types";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE_URL ??
@@ -100,6 +100,21 @@ const persistJobs = (jobList: JobInfo[]) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 };
 
+// 特許番号を統一フォーマット（JP{number}A）に変換する関数
+const formatPatentNumber = (patentId: string): string => {
+  if (!patentId) return "";
+  // 既にJPで始まりAで終わる場合はそのまま返す
+  if (patentId.startsWith("JP") && patentId.endsWith("A")) {
+    return patentId;
+  }
+  // 数字のみの場合はJP{number}Aの形式にする
+  if (/^\d+$/.test(patentId)) {
+    return `JP${patentId}A`;
+  }
+  // その他の場合はそのまま返す（WO番号など）
+  return patentId;
+};
+
 const PatentInput: React.FC = () => {
   const [patents, setPatents] = useState<PatentSlot[]>([
     { id: "patent_1", file: null },
@@ -113,6 +128,7 @@ const PatentInput: React.FC = () => {
   const [patentListData, setPatentListData] = useState<{
     jobId: string;
     patentIds: string[];
+    searchResults: SearchResultItem[];
     totalCount: number;
     pipelineStats: Record<string, unknown>;
   } | null>(null);
@@ -144,9 +160,12 @@ const PatentInput: React.FC = () => {
       const res = await fetch(`${API_BASE}/keyword-search-result/${jobId}`);
       if (res.ok) {
         const data = await res.json();
+        console.log("Keyword search result data:", data);
+        console.log("Search results with scores:", data.search_results);
         setPatentListData({
           jobId: data.job_id,
           patentIds: data.patent_ids,
+          searchResults: data.search_results || [],
           totalCount: data.total_count,
           pipelineStats: data.pipeline_stats,
         });
@@ -274,9 +293,9 @@ const PatentInput: React.FC = () => {
     setShowGraphListModal(true);
   };
 
-  // 特許を追加（最大5件）
+  // 特許を追加（最大30件）
   const addPatent = () => {
-    if (patents.length < 5) {
+    if (patents.length < 30) {
       setPatents([
         ...patents,
         { id: `patent_${patents.length + 1}`, file: null },
@@ -554,7 +573,7 @@ const PatentInput: React.FC = () => {
       <div className="patents-section">
         <h3>
           <FileText size={24} />
-          出願特許（最大5件）
+          出願特許（最大30件）
         </h3>
 
         {patents.map((patent, index) => (
@@ -600,7 +619,7 @@ const PatentInput: React.FC = () => {
           </div>
         ))}
 
-        {patents.length < 5 && (
+        {patents.length < 30 && (
           <button className="add-patent-btn" onClick={addPatent}>
             <Plus size={20} />
             特許を追加
@@ -807,6 +826,7 @@ const PatentInput: React.FC = () => {
                         padding: "8px 4px",
                         textAlign: "left",
                         borderBottom: "1px solid #e5e7eb",
+                        width: "60px",
                       }}
                     >
                       順位
@@ -820,20 +840,52 @@ const PatentInput: React.FC = () => {
                     >
                       特許番号
                     </th>
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "right",
+                        borderBottom: "1px solid #e5e7eb",
+                        width: "100px",
+                      }}
+                    >
+                      スコア
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {patentListData.patentIds.map(
-                    (patentId: string, index: number) => (
-                      <tr
-                        key={patentId}
-                        style={{ borderBottom: "1px solid #f3f4f6" }}
-                      >
-                        <td style={{ padding: "4px", color: "#6b7280" }}>
-                          {index + 1}
-                        </td>
-                        <td style={{ padding: "4px" }}>JP{patentId}A</td>
-                      </tr>
+                  {patentListData.searchResults && patentListData.searchResults.length > 0 ? (
+                    patentListData.searchResults.map(
+                      (result: SearchResultItem, index: number) => (
+                        <tr
+                          key={result.doc_number}
+                          style={{ borderBottom: "1px solid #f3f4f6" }}
+                        >
+                          <td style={{ padding: "4px", color: "#6b7280" }}>
+                            {index + 1}
+                          </td>
+                          <td style={{ padding: "4px" }}>{formatPatentNumber(result.doc_number)}</td>
+                          <td style={{ padding: "4px", textAlign: "right", fontWeight: "500" }}>
+                            {result.score.toFixed(1)}
+                          </td>
+                        </tr>
+                      )
+                    )
+                  ) : (
+                    patentListData.patentIds.map(
+                      (patentId: string, index: number) => (
+                        <tr
+                          key={patentId}
+                          style={{ borderBottom: "1px solid #f3f4f6" }}
+                        >
+                          <td style={{ padding: "4px", color: "#6b7280" }}>
+                            {index + 1}
+                          </td>
+                          <td style={{ padding: "4px" }}>{formatPatentNumber(patentId)}</td>
+                          <td style={{ padding: "4px", textAlign: "right", color: "#9ca3af" }}>
+                            -
+                          </td>
+                        </tr>
+                      )
                     )
                   )}
                 </tbody>
@@ -1008,7 +1060,7 @@ const PatentInput: React.FC = () => {
                         <td style={{ padding: "4px", color: "#6b7280" }}>
                           {index + 1}
                         </td>
-                        <td style={{ padding: "4px" }}>{patentId}</td>
+                        <td style={{ padding: "4px" }}>{formatPatentNumber(patentId)}</td>
                       </tr>
                     )
                   )}
@@ -1149,7 +1201,7 @@ const PatentInput: React.FC = () => {
                       <td style={{ padding: "4px", color: "#6b7280" }}>
                         {index + 1}
                       </td>
-                      <td style={{ padding: "4px" }}>{item.patent_id}</td>
+                      <td style={{ padding: "4px" }}>{formatPatentNumber(item.patent_id)}</td>
                       <td style={{ padding: "4px" }}>
                         {item.graph_score !== undefined
                           ? item.graph_score.toFixed(3)

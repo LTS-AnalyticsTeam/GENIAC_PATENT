@@ -35,6 +35,7 @@ class PipelineResultResponse(BaseModel):
     completed_at: datetime
     results: List[GraphResult]
     pipeline_stats: Dict[str, Any]
+    web_search_details: List[WebSearchDetail] = Field(default_factory=list)
 
 
 class JobCancelResponse(BaseModel):
@@ -43,8 +44,31 @@ class JobCancelResponse(BaseModel):
     queue_entries_removed: int = Field(0, description="Number of queued tasks removed")
 
 
+class SearchResultItem(BaseModel):
+    doc_number: str = Field(..., description="Patent document number")
+    score: float = Field(..., description="Keyword search score")
+
+
 class KeywordSearchResultResponse(BaseModel):
     job_id: str
     patent_ids: List[str] = Field(default_factory=list)
+    search_results: List[SearchResultItem] = Field(default_factory=list)
     pipeline_stats: Dict[str, Any] = Field(default_factory=dict)
+    total_count: int = 0
+
+
+class PatentIdTestRequest(BaseModel):
+    patent_id: str = Field(..., description="Patent ID to fetch from Cosmos DB for testing")
+
+
+class WebSearchDetail(BaseModel):
+    patent_id: str = Field(..., description="Unique identifier for the web result")
+    title: str = Field(default="", description="Title of the web result")
+    source_url: str = Field(default="", description="URL of the web result")
+    summary: str = Field(default="", description="Summary/abstract of the web result")
+
+
+class WebSearchResultResponse(BaseModel):
+    job_id: str
+    web_results: List[WebSearchDetail] = Field(default_factory=list)
     total_count: int = 0

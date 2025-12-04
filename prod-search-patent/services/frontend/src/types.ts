@@ -26,6 +26,8 @@ export type AssessmentCandidate = {
   ipc?: string[];
   source_url?: string;
   year?: number | null;
+  is_web_result?: boolean;
+  source?: string;
 };
 
 export type AlphaInfo = {
@@ -55,4 +57,16 @@ export type StageDetail = {
   candidate_count?: number;
   narrowed_count?: number;
   [key: string]: unknown;
+};
+
+export type WebSearchDetail = {
+  patent_id: string;
+  title: string;
+  source_url: string;
+  summary: string;
+};
+
+export type SearchResultItem = {
+  doc_number: string;
+  score: number;
 };

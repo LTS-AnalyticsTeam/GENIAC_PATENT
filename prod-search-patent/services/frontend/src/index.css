@@ -266,6 +266,12 @@ button.secondary:hover:not(:disabled) {
   color: #166534;
 }
 
+.badge-web {
+  background: #dbeafe;
+  color: #1e40af;
+  margin-left: 0.5rem;
+}
+
 .score {
   font-size: 0.85rem;
   color: #1f2937;
