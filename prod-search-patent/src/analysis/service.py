@@ -390,7 +390,7 @@ class AnalysisService:
         target_claims: Sequence[Tuple[int, str, bool]],
     ) -> str:
         summary = candidate_json.get("summary") or candidate_json.get("abstract") or ""
-        claim1 = (candidate_json.get("claim1") or candidate_json.get("claims", [{}])[0].get("text", "")) if candidate_json.get("claims") else candidate_json.get("claim1", "")
+        claim1 = ((candidate_json.get("claim1") or candidate_json.get("claims", [{}])[0].get("text", "")) if candidate_json.get("claims") else candidate_json.get("claim1", ""))
         claims_texts: List[str] = []
         claims = candidate_json.get("claims") or []
         for cl in claims[:5]:
@@ -404,7 +404,12 @@ class AnalysisService:
         for num, text, include_inventive in target_claims:
             target_claim_lines.append(f"- 請求項{num} ({'進歩性も判定' if include_inventive else '新規性のみ'}): {text}")
 
-        prompt_parts = [
+        # Web検索結果の場合はpage_contentを追加
+        is_web_result = candidate_json.get("is_web_result", False)
+        page_content = candidate_json.get("page_content", "")
+
+        # プロンプトパーツを構築
+        prompt_parts_list = [
             "【対象特許（α）】",
             f"タイトル: {alpha.title}",
             f"請求項1: {alpha.claim1}",
@@ -416,6 +421,18 @@ class AnalysisService:
             f"要約: {summary}",
             f"請求項1(候補): {claim1}",
             f"主要な請求項抜粋: {' / '.join(claims_texts[:3]) if claims_texts else 'なし'}",
+        ]
+
+        # Web検索結果の場合は本文内容も追加
+        if is_web_result and page_content:
+            prompt_parts_list.extend([
+                "",
+                "【参考：Web資料の本文抜粋】",
+                page_content[:3000],  # 最大3000文字
+            ])
+
+        # 残りのプロンプト
+        prompt_parts_list.extend([
             "",
             "【判定対象の請求項（α）】",
             "\n".join(target_claim_lines),
@@ -442,8 +459,8 @@ class AnalysisService:
             "  ]",
             "}",
             "根拠は短い引用で示し、必ず日本語で回答してください。",
-        ]
-        return "\n".join(prompt_parts)
+        ])
+        return "\n".join(prompt_parts_list)
 
     def _parse_llm_response(self, raw: Dict[str, Any], target_claims: Sequence[Tuple[int, str, bool]]) -> List[Dict[str, Any]]:
         content = None

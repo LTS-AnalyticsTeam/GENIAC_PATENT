@@ -710,124 +710,28 @@ async def run_pipeline(
     })
     tracker.complete("web_search")
 
-    # Stage 10: Merge and select final 10 candidates from 30 patents + web results
-    tracker.start("final_selection")
+    # Stage 10: Merge all candidates (30 patents + web results) for analysis
+    tracker.start("merge_candidates")
     combined_results = list(top_results) + list(web_results)
     logger.info(f"Job %s: Combined results: {len(top_results)} patents + {len(web_results)} web = {len(combined_results)} total", job_id)
 
-    # If combined results <= 10, use all
-    if len(combined_results) <= 10:
-        final_candidates = combined_results
-        logger.info(f"Job %s: Using all {len(final_candidates)} combined results (<=10)", job_id)
-    else:
-        # Use LLM to select top 10 from combined results
-        try:
-            import os
-            from openai import AzureOpenAI
-            import json as json_module
-
-            client = AzureOpenAI(
-                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
-            )
-            deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
-
-            # Prepare candidate list for LLM
-            candidates_for_llm = []
-            for idx, candidate in enumerate(combined_results):
-                candidates_for_llm.append({
-                    "index": idx,
-                    "patent_id": candidate.get("patent_id"),
-                    "title": candidate.get("title", ""),
-                    "summary": (candidate.get("summary") or "")[:500],
-                    "is_web_result": candidate.get("is_web_result", False),
-                    "source": candidate.get("source", "patent"),
-                })
-
-            user_prompt = f"""あなたは特許の新規性・進歩性を判断する専門家です。
-
-【タスク】
-以下の特許出願に対して、最も関連性の高い先行技術候補を10件選択してください。
-
-【出願内容】
-タイトル: {parsed.get("title", "")}
-要約: {parsed.get("summary", "")[:500]}
-請求項1: {claim1_text[:500]}
-
-【候補一覧】
-{json_module.dumps(candidates_for_llm, ensure_ascii=False, indent=2)}
-
-【選択基準】
-1. 技術的な関連性が高いもの
-2. 新規性・進歩性の判断に重要なもの
-3. 特許データベースとWeb検索結果をバランスよく含める（可能であれば）
-
-【出力形式】
-以下のJSON形式で、選択した候補のindexリストを返してください：
-{{"selected_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}}
-
-必ず有効なJSONのみを出力し、余計なテキストは含めないでください。
-"""
-
-            resp = client.chat.completions.create(
-                model=deployment,
-                messages=[
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=500,
-            )
-
-            content = resp.choices[0].message.content or ""
-            # Extract JSON from response
-            start = content.find("{")
-            end = content.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                json_text = content[start:end+1]
-                data = json_module.loads(json_text)
-                selected_indices = data.get("selected_indices", [])
-
-                # Validate and select
-                final_candidates = []
-                for idx in selected_indices[:10]:
-                    if 0 <= idx < len(combined_results):
-                        final_candidates.append(combined_results[idx])
-
-                if len(final_candidates) < 10:
-                    # Fill with remaining candidates if LLM didn't select enough
-                    for idx, candidate in enumerate(combined_results):
-                        if idx not in selected_indices and len(final_candidates) < 10:
-                            final_candidates.append(candidate)
-
-                logger.info(f"Job %s: LLM selected {len(final_candidates)} final candidates", job_id)
-            else:
-                raise ValueError("No valid JSON found in LLM response")
-
-        except Exception as e:
-            logger.warning(f"Job %s: Final selection with LLM failed: %s, using simple selection", job_id, e)
-            # Fallback: simple selection (first 10 from combined)
-            final_candidates = combined_results[:10]
-
-    tracker.update("final_selection", {
+    tracker.update("merge_candidates", {
         "combined_count": len(combined_results),
-        "final_count": len(final_candidates),
-        "patent_count": sum(1 for c in final_candidates if not c.get("is_web_result")),
-        "web_count": sum(1 for c in final_candidates if c.get("is_web_result")),
+        "patent_count": len(top_results),
+        "web_count": len(web_results),
     })
-    tracker.complete("final_selection")
+    tracker.complete("merge_candidates")
 
-    # Use final_candidates for analysis instead of top_results
-    top_results = final_candidates
-
-    tracker.start("analysis", {"analysis_candidates": len(top_results)})
+    # Stage 11: Analyze ALL combined candidates (30+ candidates)
+    tracker.start("analysis", {"analysis_candidates": len(combined_results)})
     analysis_service = AnalysisService()
-    analysis_payload: Dict | None = None
+    all_analysis_results: List[Dict] = []  # 全候補の分析結果を保存
     missing_candidates: List[str] = []
 
-    if top_results:
-        # Separate patent results and web results
-        patent_results = [entry for entry in top_results if not entry.get("is_web_result")]
-        web_only_results = [entry for entry in top_results if entry.get("is_web_result")]
+    if combined_results:
+        # Separate patent results and web results from ALL combined results
+        patent_results = [entry for entry in combined_results if not entry.get("is_web_result")]
+        web_only_results = [entry for entry in combined_results if entry.get("is_web_result")]
 
         # Fetch Cosmos data only for patent results
         analysis_cosmos = CosmosPatentClient(config)
@@ -867,6 +771,7 @@ async def run_pipeline(
                 "claims": [],
                 "source_url": entry.get("source_url", ""),
                 "is_web_result": True,
+                "page_content": entry.get("page_content", ""),  # URL本文内容を追加
             }
             ordered_candidates.append(web_candidate_json)
 
@@ -885,17 +790,23 @@ async def run_pipeline(
                     candidates_json=ordered_candidates,
                 )
                 analysis_payload = analysis_response.model_dump()
+
+                # 分析結果を各候補に紐付け
+                for entry in combined_results:
+                    entry["analysis_status"] = "completed"
+                    entry["analysis"] = analysis_payload
+
             except Exception as exc:  # pragma: no cover
                 logger.warning("Analysis failed: %s", exc)
                 analysis_payload = None
-
-    for entry in top_results:
-        if analysis_payload:
-            entry["analysis_status"] = "completed"
-            entry["analysis"] = analysis_payload
+                for entry in combined_results:
+                    entry.setdefault("analysis_status", "failed")
+                    entry.setdefault("analysis_error", "解析結果を生成できませんでした")
         else:
-            entry.setdefault("analysis_status", "failed")
-            entry.setdefault("analysis_error", "解析結果を生成できませんでした")
+            analysis_payload = None
+            for entry in combined_results:
+                entry.setdefault("analysis_status", "failed")
+                entry.setdefault("analysis_error", "候補データが取得できませんでした")
 
     if missing_candidates:
         tracker.update(
@@ -906,6 +817,130 @@ async def run_pipeline(
         )
 
     tracker.complete("analysis")
+
+    # Stage 12: Select top 10 from analyzed candidates using LLM
+    tracker.start("final_selection")
+    final_candidates = combined_results  # デフォルトは全候補
+
+    if analysis_payload and len(combined_results) > 10:
+        # 分析結果を元にLLMで上位10件を選択
+        try:
+            import os
+            from openai import AzureOpenAI
+            import json as json_module
+
+            client = AzureOpenAI(
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
+            )
+            deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+
+            # 分析結果からclaim1の評価を抽出
+            claim1_candidates = analysis_payload.get("claim1_candidates", [])
+
+            # LLM用に候補リストを準備
+            candidates_for_llm = []
+            for idx, candidate in enumerate(combined_results):
+                # 対応する分析結果を探す
+                matching_assessment = None
+                candidate_id = candidate.get("patent_id", "")
+                for assessed in claim1_candidates:
+                    if assessed.get("doc_id") == candidate_id:
+                        matching_assessment = assessed
+                        break
+
+                # 分析結果のサマリーを作成
+                assessment_summary = ""
+                if matching_assessment:
+                    assessments = matching_assessment.get("assessments", [])
+                    if assessments:
+                        first_assessment = assessments[0]
+                        novelty = first_assessment.get("novelty", "uncertain")
+                        inventive_step = first_assessment.get("inventive_step", "")
+                        evidence_count = len(first_assessment.get("evidence", []))
+                        assessment_summary = f"新規性:{novelty}, 進歩性:{inventive_step}, 根拠数:{evidence_count}"
+
+                candidates_for_llm.append({
+                    "index": idx,
+                    "patent_id": candidate.get("patent_id"),
+                    "title": candidate.get("title", "")[:100],
+                    "is_web_result": candidate.get("is_web_result", False),
+                    "assessment": assessment_summary,
+                })
+
+            user_prompt = f"""あなたは特許審査の専門家です。以下の分析済み候補から、最も重要な先行技術候補を10件選択してください。
+
+【出願特許】
+タイトル: {parsed.get("title", "")}
+要約: {parsed.get("summary", "")[:300]}
+請求項1: {claim1_text[:300]}
+
+【分析済み候補一覧】
+{json_module.dumps(candidates_for_llm, ensure_ascii=False, indent=2)}
+
+【選択基準】
+1. 新規性が「denied」（否定）の候補を優先
+2. 進歩性も「denied」の候補はさらに高優先
+3. 根拠数が多い候補を優先
+4. 特許データベースとWeb検索結果をバランスよく含める
+
+【出力形式】
+以下のJSON形式で、選択した候補のindexリストを返してください：
+{{"selected_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}}
+
+必ず有効なJSONのみを出力し、余計なテキストは含めないでください。
+"""
+
+            resp = client.chat.completions.create(
+                model=deployment,
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=500,
+            )
+
+            content = resp.choices[0].message.content or ""
+            # Extract JSON from response
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                json_text = content[start:end+1]
+                data = json_module.loads(json_text)
+                selected_indices = data.get("selected_indices", [])
+
+                # Validate and select
+                final_candidates = []
+                for idx in selected_indices[:10]:
+                    if 0 <= idx < len(combined_results):
+                        final_candidates.append(combined_results[idx])
+
+                if len(final_candidates) < 10:
+                    # Fill with remaining candidates if LLM didn't select enough
+                    for idx, candidate in enumerate(combined_results):
+                        if idx not in selected_indices and len(final_candidates) < 10:
+                            final_candidates.append(candidate)
+
+                logger.info(f"Job %s: LLM selected {len(final_candidates)} final candidates from analysis results", job_id)
+            else:
+                raise ValueError("No valid JSON found in LLM response")
+
+        except Exception as e:
+            logger.warning(f"Job %s: Final selection with LLM failed: %s, using top 10", job_id, e)
+            # Fallback: use first 10
+            final_candidates = combined_results[:10]
+    elif len(combined_results) <= 10:
+        # 10件以下の場合は全て使用
+        final_candidates = combined_results
+        logger.info(f"Job %s: Using all {len(final_candidates)} candidates (<=10)", job_id)
+
+    tracker.update("final_selection", {
+        "analyzed_count": len(combined_results),
+        "final_count": len(final_candidates),
+        "patent_count": sum(1 for c in final_candidates if not c.get("is_web_result")),
+        "web_count": sum(1 for c in final_candidates if c.get("is_web_result")),
+    })
+    tracker.complete("final_selection")
 
     # Prepare full web search results with title and URL
     # Include ALL web results (not just the ones in final_candidates)
@@ -922,7 +957,7 @@ async def run_pipeline(
     logger.info(f"Job %s: Created web_search_details with {len(web_search_details)} items", job_id)
 
     final_payload = {
-        "results": top_results,
+        "results": final_candidates,  # 選択された上位10件を返す
         "keyword_search_results": narrowed_patent_ids,
         "search_results": search_result.get("search_results", []),
         "web_search_results": [r.get("patent_id") for r in web_results],
@@ -936,7 +971,8 @@ async def run_pipeline(
             "vector_search_results": len(vector_docs),
             "vector_queries": len(generated_queries),
             "web_search_results": len(web_results),
-            "analysis_candidates": len(top_results),
+            "analysis_candidates": len(combined_results),  # 分析した候補数（30+）
+            "final_candidates": len(final_candidates),  # 最終選択数（10）
             "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
             "stage2_keyword_filter_results": len(narrowed_patent_ids),
             "analysis_completed": 1 if analysis_payload else 0,

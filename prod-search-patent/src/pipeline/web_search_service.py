@@ -507,6 +507,7 @@ async def search_web_references(claim1_text: str, azure_deployment: str = None) 
                 "source_url": record["source_url"],
                 "source": record["source"],
                 "is_web_result": True,
+                "page_content": record.get("abstract", ""),  # LLMなしの場合はabstractのみ
             })
         return results
 
@@ -525,6 +526,11 @@ async def search_web_references(claim1_text: str, azure_deployment: str = None) 
             title = enriched.get("bibliographic", {}).get("title") or record["title"] or "関連資料"
             abstract = enriched.get("abstract") or record["abstract"] or title
 
+            # ページ本文内容を取得（LLM分析用）
+            page_content = page_info.get("page_text_excerpt", "")
+            if not page_content:
+                page_content = page_info.get("page_abstract", "")
+
             results.append({
                 "patent_id": f"WEB_{record['source']}_{idx}",
                 "title": title,
@@ -532,6 +538,7 @@ async def search_web_references(claim1_text: str, azure_deployment: str = None) 
                 "source_url": record["source_url"],
                 "source": record["source"],
                 "is_web_result": True,
+                "page_content": page_content,  # URL本文内容を追加
             })
 
             logger.info(f"Processed web result {idx+1}/{len(top10)}: {title[:50]}...")
@@ -545,6 +552,7 @@ async def search_web_references(claim1_text: str, azure_deployment: str = None) 
                 "source_url": record["source_url"],
                 "source": record["source"],
                 "is_web_result": True,
+                "page_content": record.get("abstract", ""),  # エラー時はabstractのみ
             })
 
     logger.info(f"Web search completed: {len(results)} results")
