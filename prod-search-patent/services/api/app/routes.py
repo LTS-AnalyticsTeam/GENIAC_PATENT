@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from pipeline import IngestionError, JobManager, PipelineConfig
 from pipeline.job_manager import JobState
 
-from .models import GraphResult, IngestResponse, JobCancelResponse, JobStatusResponse, PipelineResultResponse, KeywordSearchResultResponse
+from .models import GraphResult, IngestResponse, JobCancelResponse, JobStatusResponse, PipelineResultResponse, KeywordSearchResultResponse, PatentIdTestRequest, WebSearchResultResponse, WebSearchDetail
 from .deps import get_job_manager, get_pipeline_config
 
 
@@ -75,6 +75,28 @@ async def ingest_patent_text(
     return IngestResponse(job_id=job_id, status_url=status_url, result_url=result_url, detail=initial_detail)
 
 
+@router.post("/ingest-patent-id", response_model=IngestResponse, status_code=202)
+async def ingest_patent_id(
+    request: Request,
+    payload: PatentIdTestRequest,
+    job_manager: JobManager = Depends(get_job_manager),
+    config: PipelineConfig = Depends(get_pipeline_config),
+) -> IngestResponse:
+    """テスト用エンドポイント: 特許番号を指定してCosmosDBから取得し、パイプラインを実行"""
+    patent_id = payload.patent_id.strip()
+    if not patent_id:
+        raise HTTPException(status_code=400, detail="Patent ID is required")
+
+    initial_detail = _initial_job_detail()
+    job_id = job_manager.create_job(JobState(status="queued", detail=initial_detail))
+    job_manager.store_payload(job_id, {"patent_id": patent_id})
+    job_manager.enqueue_job(job_id)
+
+    status_url = str(request.url_for("get_job_status", job_id=job_id))
+    result_url = str(request.url_for("get_job_result", job_id=job_id))
+    return IngestResponse(job_id=job_id, status_url=status_url, result_url=result_url, detail=initial_detail)
+
+
 
 @router.get("/status/{job_id}", name="get_job_status", response_model=JobStatusResponse)
 def get_status(job_id: str, job_manager: JobManager = Depends(get_job_manager)) -> JobStatusResponse:
@@ -95,11 +117,14 @@ def get_result(job_id: str, job_manager: JobManager = Depends(get_job_manager)) 
     if not result_payload:
         raise HTTPException(status_code=404, detail="Result unavailable")
     results = [GraphResult(**item) for item in result_payload.get("results", [])]
+    web_details_raw = result_payload.get("web_search_details", [])
+    web_details = [WebSearchDetail(**item) for item in web_details_raw]
     return PipelineResultResponse(
         job_id=job_id,
         completed_at=datetime.now(timezone.utc),
         results=results,
         pipeline_stats=result_payload.get("pipeline_stats", {}),
+        web_search_details=web_details,
     )
 
 
@@ -129,11 +154,48 @@ def get_keyword_search_result(job_id: str, job_manager: JobManager = Depends(get
     patent_ids = result_payload.get("keyword_search_results", [])
     pipeline_stats = result_payload.get("pipeline_stats", {})
 
+    # search_results (with scores) を取得
+    search_results_raw = result_payload.get("search_results", [])
+    from app.models import SearchResultItem
+    search_results = []
+    if search_results_raw:
+        try:
+            search_results = [
+                SearchResultItem(doc_number=item["doc_number"], score=item["score"])
+                for item in search_results_raw
+            ]
+            logger.info(f"Loaded {len(search_results)} search results with scores")
+        except Exception as e:
+            logger.error(f"Failed to parse search_results: {e}")
+            # Fallback: search_results が空のままになる
+
     return KeywordSearchResultResponse(
         job_id=job_id,
         patent_ids=patent_ids,
+        search_results=search_results,
         pipeline_stats=pipeline_stats,
         total_count=len(patent_ids)
+    )
+
+
+@router.get("/web-search-result/{job_id}", response_model=WebSearchResultResponse)
+def get_web_search_result(job_id: str, job_manager: JobManager = Depends(get_job_manager)) -> WebSearchResultResponse:
+    """Web検索結果（タイトルとURLを含む）を取得"""
+    state = job_manager.get_state(job_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    result_payload = job_manager.fetch_result(job_id)
+    if not result_payload:
+        raise HTTPException(status_code=404, detail="Web search result not available")
+
+    web_details_raw = result_payload.get("web_search_details", [])
+    web_details = [WebSearchDetail(**item) for item in web_details_raw]
+
+    return WebSearchResultResponse(
+        job_id=job_id,
+        web_results=web_details,
+        total_count=len(web_details)
     )
 
 

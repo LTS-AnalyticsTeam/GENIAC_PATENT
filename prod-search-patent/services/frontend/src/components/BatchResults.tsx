@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronLeft, FileText, AlertCircle } from "lucide-react";
+import { ChevronLeft, FileText, AlertCircle, ExternalLink } from "lucide-react";
 import {
   AnalysisResponse,
   AssessmentCandidate,
   ClaimAssessment,
+  WebSearchDetail,
 } from "../types";
 import "./BatchResults.css";
 
@@ -32,6 +33,7 @@ interface PipelineResultResponse {
   completed_at: string;
   results: GraphResult[];
   pipeline_stats: Record<string, unknown>;
+  web_search_details?: WebSearchDetail[];
 }
 
 interface LocationState {
@@ -66,6 +68,8 @@ const BatchResults: React.FC = () => {
   const [activeCandidateIdx, setActiveCandidateIdx] = useState(0);
   const [loading, setLoading] = useState(!stateBatchResult);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [webSearchResults, setWebSearchResults] = useState<WebSearchDetail[]>([]);
+  const [showWebModal, setShowWebModal] = useState(false);
   const jobIdFromQuery = searchParams.get("jobId");
 
   useEffect(() => {
@@ -132,6 +136,12 @@ const BatchResults: React.FC = () => {
         console.warn("Failed to persist result cache", err);
       }
     }
+  }, [batchResult]);
+
+  // Load web search results from batchResult
+  useEffect(() => {
+    if (!batchResult) return;
+    setWebSearchResults(batchResult.web_search_details || []);
   }, [batchResult]);
 
   const results = batchResult?.results ?? [];
@@ -376,8 +386,67 @@ const BatchResults: React.FC = () => {
             完了日時:{" "}
             {new Date(batchResult.completed_at).toLocaleString("ja-JP")}
           </span>
+          {batchResult.pipeline_stats?.web_search_results !== undefined &&
+           batchResult.pipeline_stats.web_search_results > 0 && (
+            <button
+              className="web-stats-button"
+              onClick={() => setShowWebModal(true)}
+            >
+              🌐 Web検索結果: {batchResult.pipeline_stats.web_search_results as number}件
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Web検索結果モーダル */}
+      {showWebModal && (
+        <div className="modal-overlay" onClick={() => setShowWebModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>🌐 Web検索結果 ({webSearchResults.length}件)</h2>
+              <button
+                className="modal-close"
+                onClick={() => setShowWebModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              {webSearchResults.length > 0 ? (
+                <div className="web-results-list">
+                  {webSearchResults.map((result, idx) => (
+                    <div key={result.patent_id || idx} className="web-result-item">
+                      <div className="web-result-header">
+                        <ExternalLink size={16} />
+                        <a
+                          href={result.source_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="web-result-link"
+                        >
+                          {result.title || "タイトルなし"}
+                        </a>
+                      </div>
+                      {result.summary && (
+                        <p className="web-result-summary">{result.summary}</p>
+                      )}
+                      <div className="web-result-url">{result.source_url}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="no-results">
+                  <p>Web検索結果の詳細データが利用できません。</p>
+                  <p style={{ fontSize: '0.9rem', marginTop: '0.5rem', color: 'var(--text-muted)' }}>
+                    このジョブは古いバージョンで実行されたため、Web検索結果の詳細が保存されていません。
+                    新しいジョブを実行すると、ここにタイトル、要約、URLが表示されます。
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* タブナビゲーション */}
       <div className="tabs-container">

@@ -11,6 +11,7 @@ from pipeline import (
     JobState,
     run_pipeline,
     run_patent_search_from_json,
+    run_test_pipeline_from_patent_id,
 )
 
 logging.basicConfig(
@@ -41,15 +42,11 @@ signal.signal(signal.SIGINT, handle_exit)
 
 async def process_job(job_id: str) -> None:
     payload = job_manager.fetch_payload(job_id)
-    if not payload or ("json" not in payload and "text" not in payload):
+    if not payload or ("json" not in payload and "text" not in payload and "patent_id" not in payload):
         logger.error("Job %s payload missing", job_id)
         job_manager.set_state(job_id, JobState(status="failed", detail={"reason": "payload_missing"}))
         return
 
-    if "json" in payload:
-        input_bytes = payload["json"].encode("utf-8")
-    else:
-        input_bytes = payload["text"].encode("utf-8")
     state = job_manager.get_state(job_id)
     if job_manager.is_cancelled(job_id) or (state and state.status == "cancelled"):
         logger.info("Job %s cancelled before processing started", job_id)
@@ -57,8 +54,26 @@ async def process_job(job_id: str) -> None:
     job_manager.set_state(job_id, JobState(status="processing", detail=state.detail if state else {}))
 
     try:
-        # Run the full pipeline (parsing, cosmos query, keyword search, embedding, etc.)
-        pipeline_result = await run_pipeline(config, job_manager, job_id, input_bytes)
+        # Check if this is a test job (patent_id input)
+        if "patent_id" in payload:
+            patent_id = payload["patent_id"]
+            logger.info("Job %s: Running TEST pipeline for patent_id=%s", job_id, patent_id)
+            pipeline_result = await run_test_pipeline_from_patent_id(
+                job_id=job_id,
+                patent_id=patent_id,
+                job_manager=job_manager,
+                config=config,
+            )
+        else:
+            # Normal pipeline (JSON or text input)
+            if "json" in payload:
+                input_bytes = payload["json"].encode("utf-8")
+            else:
+                input_bytes = payload["text"].encode("utf-8")
+
+            # Run the full pipeline (parsing, cosmos query, keyword search, embedding, etc.)
+            pipeline_result = await run_pipeline(config, job_manager, job_id, input_bytes)
+
         logger.info("Job %s: Pipeline completed successfully", job_id)
 
     except JobCancelledError:

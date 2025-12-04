@@ -58,3 +58,15 @@ export type StageDetail = {
   narrowed_count?: number;
   [key: string]: unknown;
 };
+
+export type WebSearchDetail = {
+  patent_id: string;
+  title: string;
+  source_url: string;
+  summary: string;
+};
+
+export type SearchResultItem = {
+  doc_number: string;
+  score: number;
+};

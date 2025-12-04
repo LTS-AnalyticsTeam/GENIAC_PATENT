@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import "./PatentInput.css";
 import StageProgress from "./StageProgress";
-import { StageDetail } from "../types";
+import { StageDetail, SearchResultItem } from "../types";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE_URL ??
@@ -113,6 +113,7 @@ const PatentInput: React.FC = () => {
   const [patentListData, setPatentListData] = useState<{
     jobId: string;
     patentIds: string[];
+    searchResults: SearchResultItem[];
     totalCount: number;
     pipelineStats: Record<string, unknown>;
   } | null>(null);
@@ -144,9 +145,12 @@ const PatentInput: React.FC = () => {
       const res = await fetch(`${API_BASE}/keyword-search-result/${jobId}`);
       if (res.ok) {
         const data = await res.json();
+        console.log("Keyword search result data:", data);
+        console.log("Search results with scores:", data.search_results);
         setPatentListData({
           jobId: data.job_id,
           patentIds: data.patent_ids,
+          searchResults: data.search_results || [],
           totalCount: data.total_count,
           pipelineStats: data.pipeline_stats,
         });
@@ -807,6 +811,7 @@ const PatentInput: React.FC = () => {
                         padding: "8px 4px",
                         textAlign: "left",
                         borderBottom: "1px solid #e5e7eb",
+                        width: "60px",
                       }}
                     >
                       順位
@@ -820,20 +825,52 @@ const PatentInput: React.FC = () => {
                     >
                       特許番号
                     </th>
+                    <th
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "right",
+                        borderBottom: "1px solid #e5e7eb",
+                        width: "100px",
+                      }}
+                    >
+                      スコア
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {patentListData.patentIds.map(
-                    (patentId: string, index: number) => (
-                      <tr
-                        key={patentId}
-                        style={{ borderBottom: "1px solid #f3f4f6" }}
-                      >
-                        <td style={{ padding: "4px", color: "#6b7280" }}>
-                          {index + 1}
-                        </td>
-                        <td style={{ padding: "4px" }}>JP{patentId}A</td>
-                      </tr>
+                  {patentListData.searchResults && patentListData.searchResults.length > 0 ? (
+                    patentListData.searchResults.map(
+                      (result: SearchResultItem, index: number) => (
+                        <tr
+                          key={result.doc_number}
+                          style={{ borderBottom: "1px solid #f3f4f6" }}
+                        >
+                          <td style={{ padding: "4px", color: "#6b7280" }}>
+                            {index + 1}
+                          </td>
+                          <td style={{ padding: "4px" }}>JP{result.doc_number}A</td>
+                          <td style={{ padding: "4px", textAlign: "right", fontWeight: "500" }}>
+                            {result.score.toFixed(1)}
+                          </td>
+                        </tr>
+                      )
+                    )
+                  ) : (
+                    patentListData.patentIds.map(
+                      (patentId: string, index: number) => (
+                        <tr
+                          key={patentId}
+                          style={{ borderBottom: "1px solid #f3f4f6" }}
+                        >
+                          <td style={{ padding: "4px", color: "#6b7280" }}>
+                            {index + 1}
+                          </td>
+                          <td style={{ padding: "4px" }}>JP{patentId}A</td>
+                          <td style={{ padding: "4px", textAlign: "right", color: "#9ca3af" }}>
+                            -
+                          </td>
+                        </tr>
+                      )
                     )
                   )}
                 </tbody>

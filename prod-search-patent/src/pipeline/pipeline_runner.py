@@ -728,7 +728,7 @@ async def run_pipeline(
                 azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
             )
-            deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+            deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
 
             # Prepare candidate list for LLM
             candidates_for_llm = []
@@ -772,7 +772,7 @@ async def run_pipeline(
                 messages=[
                     {"role": "user", "content": user_prompt},
                 ],
-                max_completion_tokens=500,
+                max_tokens=500,
             )
 
             content = resp.choices[0].message.content or ""
@@ -904,10 +904,26 @@ async def run_pipeline(
 
     tracker.complete("analysis")
 
+    # Prepare full web search results with title and URL
+    # Include ALL web results (not just the ones in final_candidates)
+    web_search_details = [
+        {
+            "patent_id": r.get("patent_id", ""),
+            "title": r.get("title", ""),
+            "source_url": r.get("source_url", ""),
+            "summary": r.get("summary", ""),
+        }
+        for r in web_results
+    ]
+
+    logger.info(f"Job %s: Created web_search_details with {len(web_search_details)} items", job_id)
+
     final_payload = {
         "results": top_results,
         "keyword_search_results": narrowed_patent_ids,
+        "search_results": search_result.get("search_results", []),
         "web_search_results": [r.get("patent_id") for r in web_results],
+        "web_search_details": web_search_details,
         "pipeline_stats": {
             "trimmed": len(trimmed_docs),
             "stage1_indexed": success,
@@ -927,3 +943,94 @@ async def run_pipeline(
     tracker.finalize(final_payload["pipeline_stats"])
     job_manager.store_result(job_id, final_payload)
     return final_payload
+
+
+async def run_test_pipeline_from_patent_id(
+    job_id: str,
+    patent_id: str,
+    job_manager: JobManager,
+    config: PipelineConfig,
+) -> Dict[str, Any]:
+    """
+    テスト用パイプライン: 特許番号からCosmosDBのJSONを取得し、既存のパイプラインを実行
+    """
+    logger.info(f"Job %s: Starting test pipeline for patent_id=%s", job_id, patent_id)
+
+    # Fetch JSON from Cosmos DB
+    cosmos_client = CosmosPatentClient(config)
+    try:
+        docs_map = cosmos_client.fetch_by_patent_ids([patent_id])
+        if not docs_map or patent_id not in docs_map:
+            raise PipelineStageError(
+                "fetching_from_cosmos",
+                f"Patent ID {patent_id} not found in Cosmos DB"
+            )
+
+        patent_json = docs_map[patent_id]
+        logger.info(f"Job %s: Successfully fetched patent JSON from Cosmos DB", job_id)
+
+        # Convert JSON to bytes for existing pipeline
+        json_bytes = json.dumps(patent_json, ensure_ascii=False).encode("utf-8")
+
+    finally:
+        cosmos_client.close()
+
+    # Run existing pipeline with the fetched JSON
+    logger.info(f"Job %s: Running standard pipeline with fetched JSON", job_id)
+    return await run_pipeline(config, job_manager, job_id, json_bytes)
+
+
+def _extract_parsed_from_cosmos_json(cosmos_json: Dict) -> Dict:
+    """CosmosDBのJSON構造からパース済みデータを抽出"""
+    bibliographic = cosmos_json.get("bibliographic", {})
+
+    # Title
+    title = ""
+    if isinstance(bibliographic.get("invention_title"), list):
+        for t in bibliographic["invention_title"]:
+            if isinstance(t, dict) and t.get("lang") == "ja":
+                title = t.get("text", "")
+                break
+    elif isinstance(bibliographic.get("invention_title"), str):
+        title = bibliographic["invention_title"]
+
+    # Summary/Abstract
+    abstract = cosmos_json.get("abstract", {})
+    summary = ""
+    if isinstance(abstract, str):
+        summary = abstract
+    elif isinstance(abstract, dict):
+        abstract_text = abstract.get("text", "")
+        if isinstance(abstract_text, list):
+            summary = " ".join([p.get("text", "") if isinstance(p, dict) else str(p) for p in abstract_text])
+        elif isinstance(abstract_text, str):
+            summary = abstract_text
+
+    # Claim1
+    claims = cosmos_json.get("claims", [])
+    claim1 = ""
+    if claims and len(claims) > 0:
+        first_claim = claims[0]
+        if isinstance(first_claim, dict):
+            claim_text = first_claim.get("text", "")
+            if isinstance(claim_text, list):
+                claim1 = " ".join([p.get("text", "") if isinstance(p, dict) else str(p) for p in claim_text])
+            else:
+                claim1 = str(claim_text)
+
+    # IPC
+    ipc_list = []
+    classification = bibliographic.get("classification", {})
+    ipc_data = classification.get("ipc", [])
+    for ipc_entry in ipc_data:
+        if isinstance(ipc_entry, dict):
+            ipc_text = ipc_entry.get("text", "")
+            if ipc_text:
+                ipc_list.append(ipc_text)
+
+    return {
+        "title": title.strip(),
+        "summary": summary.strip(),
+        "claim1": claim1.strip(),
+        "ipc": ipc_list,
+    }
