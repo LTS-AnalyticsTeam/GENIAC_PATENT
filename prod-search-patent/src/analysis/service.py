@@ -252,6 +252,131 @@ class AnalysisService:
             limits=limits,
         )
 
+    async def select_top_candidates(
+        self,
+        *,
+        combined_candidates: List[Dict[str, Any]],
+        analysis_result: Optional[Dict[str, Any]],
+        alpha_info: Dict[str, Any],
+        top_n: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        分析済み候補からLLMを使用して上位N件を選択
+
+        Args:
+            combined_candidates: 全候補のリスト
+            analysis_result: analyze_candidatesの結果
+            alpha_info: 出願特許の情報（title, summary, claim1）
+            top_n: 選択する候補数
+
+        Returns:
+            選択された上位候補のリスト
+        """
+        # 候補数が少ない場合は全て返す
+        if len(combined_candidates) <= top_n:
+            return combined_candidates
+
+        # 分析結果がない場合は先頭N件を返す
+        if not analysis_result:
+            return combined_candidates[:top_n]
+
+        # 分析結果からclaim1の評価を抽出
+        claim1_candidates = analysis_result.get("claim1_candidates", [])
+
+        # LLM用に候補リストを準備
+        candidates_for_llm = []
+        for idx, candidate in enumerate(combined_candidates):
+            # 対応する分析結果を探す
+            matching_assessment = None
+            candidate_id = candidate.get("patent_id", "")
+            for assessed in claim1_candidates:
+                if assessed.get("doc_id") == candidate_id:
+                    matching_assessment = assessed
+                    break
+
+            # 分析結果のサマリーを作成
+            assessment_summary = ""
+            if matching_assessment:
+                assessments = matching_assessment.get("assessments", [])
+                if assessments:
+                    first_assessment = assessments[0]
+                    novelty = first_assessment.get("novelty", "uncertain")
+                    inventive_step = first_assessment.get("inventive_step", "")
+                    evidence_count = len(first_assessment.get("evidence", []))
+                    assessment_summary = f"新規性:{novelty}, 進歩性:{inventive_step}, 根拠数:{evidence_count}"
+
+            candidates_for_llm.append({
+                "index": idx,
+                "patent_id": candidate.get("patent_id"),
+                "title": candidate.get("title", "")[:100],
+                "is_web_result": candidate.get("is_web_result", False),
+                "assessment": assessment_summary,
+            })
+
+        user_prompt = f"""あなたは特許審査の専門家です。以下の分析済み候補から、最も重要な先行技術候補を{top_n}件選択してください。
+
+【出願特許】
+タイトル: {alpha_info.get("title", "")}
+要約: {alpha_info.get("summary", "")[:300]}
+請求項1: {alpha_info.get("claim1", "")[:300]}
+
+【分析済み候補一覧】
+{json.dumps(candidates_for_llm, ensure_ascii=False, indent=2)}
+
+【選択基準】
+1. 新規性が「denied」（否定）の候補を優先
+2. 進歩性も「denied」の候補はさらに高優先
+3. 根拠数が多い候補を優先
+4. 特許データベースとWeb検索結果をバランスよく含める
+
+【出力形式】
+以下のJSON形式で、選択した候補のindexリストを返してください：
+{{"selected_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}}
+
+必ず有効なJSONのみを出力し、余計なテキストは含めないでください。
+"""
+
+        try:
+            response = await self.aoai_client.chat(
+                deployment=self._chat_deployment,
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=500,
+            )
+
+            content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if not content:
+                raise ValueError("Empty response from LLM")
+
+            # Extract JSON from response
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                json_text = content[start:end+1]
+                data = json.loads(json_text)
+                selected_indices = data.get("selected_indices", [])
+
+                # Validate and select
+                final_candidates = []
+                for idx in selected_indices[:top_n]:
+                    if 0 <= idx < len(combined_candidates):
+                        final_candidates.append(combined_candidates[idx])
+
+                if len(final_candidates) < top_n:
+                    # Fill with remaining candidates if LLM didn't select enough
+                    for idx, candidate in enumerate(combined_candidates):
+                        if idx not in selected_indices and len(final_candidates) < top_n:
+                            final_candidates.append(candidate)
+
+                return final_candidates
+            else:
+                raise ValueError("No valid JSON found in LLM response")
+
+        except Exception as e:
+            # Fallback: return first N candidates
+            return combined_candidates[:top_n]
+
     @staticmethod
     def _extract_claims_2_to_5(source_json: Dict[str, Any]) -> List[Dict[str, str]]:
         claims = source_json.get("claims", []) or []
