@@ -20,6 +20,11 @@ class JobStatusResponse(BaseModel):
 
 
 class GraphResult(BaseModel):
+    model_config = {
+        "use_enum_values": True,
+        "json_schema_extra": {"example": {"patent_id": "123"}},
+    }
+
     patent_id: str
     title: Optional[str] = None
     summary: Optional[str] = None
@@ -28,6 +33,11 @@ class GraphResult(BaseModel):
     analysis_status: Optional[str] = None
     analysis_error: Optional[str] = None
     analysis: Optional[Dict[str, Any]] = None
+    # Fields for Web search results and assessments
+    is_web_result: bool = Field(default=False)
+    source_url: Optional[str] = Field(default=None)
+    pub_number: Optional[str] = Field(default=None)
+    assessments: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class PipelineResultResponse(BaseModel):

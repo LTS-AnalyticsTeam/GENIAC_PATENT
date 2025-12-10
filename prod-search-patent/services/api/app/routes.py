@@ -106,7 +106,7 @@ def get_status(job_id: str, job_manager: JobManager = Depends(get_job_manager)) 
     return JobStatusResponse(job_id=job_id, status=state.status, detail=state.detail)
 
 
-@router.get("/result/{job_id}", name="get_job_result", response_model=PipelineResultResponse)
+@router.get("/result/{job_id}", name="get_job_result", response_model=PipelineResultResponse, response_model_exclude_unset=False, response_model_exclude_none=False)
 def get_result(job_id: str, job_manager: JobManager = Depends(get_job_manager)) -> PipelineResultResponse:
     state = job_manager.get_state(job_id)
     if not state:
