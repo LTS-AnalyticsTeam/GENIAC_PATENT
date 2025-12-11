@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -12,6 +13,8 @@ from pipeline.job_manager import JobState
 
 from .models import GraphResult, IngestResponse, JobCancelResponse, JobStatusResponse, PipelineResultResponse, KeywordSearchResultResponse, PatentIdTestRequest, WebSearchResultResponse, WebSearchDetail
 from .deps import get_job_manager, get_pipeline_config
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -106,7 +109,7 @@ def get_status(job_id: str, job_manager: JobManager = Depends(get_job_manager)) 
     return JobStatusResponse(job_id=job_id, status=state.status, detail=state.detail)
 
 
-@router.get("/result/{job_id}", name="get_job_result", response_model=PipelineResultResponse)
+@router.get("/result/{job_id}", name="get_job_result", response_model=PipelineResultResponse, response_model_exclude_unset=False, response_model_exclude_none=False)
 def get_result(job_id: str, job_manager: JobManager = Depends(get_job_manager)) -> PipelineResultResponse:
     state = job_manager.get_state(job_id)
     if not state:

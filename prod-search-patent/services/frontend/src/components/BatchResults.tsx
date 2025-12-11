@@ -233,7 +233,9 @@ const BatchResults: React.FC = () => {
                 </div>
                 <div className="evidence-why">{ev.why}</div>
                 {ev.section && (
-                  <div className="evidence-meta">出典: {ev.section}</div>
+                  <div className="evidence-meta">
+                    出典: {ev.section === "web" ? "Web資料" : ev.section}
+                  </div>
                 )}
               </li>
             ))}
@@ -282,16 +284,15 @@ const BatchResults: React.FC = () => {
         <div className="candidate-header">
           <div>
             <div className="badge primary">{label}</div>
-            {isWeb && <div className="badge badge-web">Web検索結果</div>}
             <h3>{candidate.title}</h3>
             <div className="candidate-meta">
               {isWeb && candidate.source_url ? (
                 <a href={candidate.source_url} target="_blank" rel="noopener noreferrer">
                   参照URL: {candidate.source_url}
                 </a>
-              ) : (
-                <span>特許番号: {candidate.pub_number ?? "不明"}</span>
-              )}
+              ) : candidate.pub_number ? (
+                <span>特許番号: {candidate.pub_number}</span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -345,7 +346,9 @@ const BatchResults: React.FC = () => {
                       </div>
                       <div className="evidence-why">{ev.why}</div>
                       {ev.section && (
-                        <div className="evidence-meta">出典: {ev.section}</div>
+                        <div className="evidence-meta">
+                          出典: {ev.section === "web" ? "Web資料" : ev.section}
+                        </div>
                       )}
                     </li>
                   ))}
@@ -380,7 +383,9 @@ const BatchResults: React.FC = () => {
         </button>
         <h1>特許分析結果</h1>
         <div className="batch-summary">
-          <span>特許ID: {analysis?.alpha.pub_number || "不明"}</span>
+          {analysis?.alpha.pub_number && analysis.alpha.pub_number !== "UNKNOWN" && (
+            <span>特許ID: {analysis.alpha.pub_number}</span>
+          )}
           <span>タイトル: {analysis?.alpha.title || "不明"}</span>
           <span>
             完了日時:{" "}
@@ -463,7 +468,7 @@ const BatchResults: React.FC = () => {
                 <FileText size={16} />
                 <span className="tab-title">
                   {kindLabel} : {c.title}
-                  {c.pub_number && (
+                  {c.pub_number && !c.source_url && (
                     <span className="tab-subtitle">{c.pub_number}</span>
                   )}
                 </span>

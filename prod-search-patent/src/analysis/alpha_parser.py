@@ -25,7 +25,7 @@ def parse_alpha_text(raw_text: str) -> AlphaInfo:
 
     return AlphaInfo(
         title=title or "特許α",
-        pub_number=pub_number or "UNKNOWN",
+        pub_number=pub_number or None,
         claim1=claim1,
         claims_rest=claims_rest,
     )

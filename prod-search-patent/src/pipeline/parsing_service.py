@@ -109,6 +109,17 @@ def convert_xml_to_json(xml_text: str) -> Dict[str, Any]:
     parser = ET.XMLParser(target=ET.TreeBuilder(), encoding="utf-8")
     root = ET.fromstring(xml_text.encode("utf-8"), parser=parser)
 
+    # Extract publication number (patent ID)
+    # ST96 format: .//pat:PublicationNumber
+    # ST36 format: ./bibliographic-data/publication-reference/document-id/doc-number
+    patent_id = ""
+    pub_number_node = find_first(root, [
+        ".//pat:PublicationNumber",
+        "./bibliographic-data/publication-reference/document-id/doc-number"
+    ])
+    if pub_number_node is not None:
+        patent_id = text_of(pub_number_node)
+
     # ここでは省略版として最も重要なフィールドのみ抽出（詳細は元スクリプト同様に拡張可能）
     biblio_title = text_of(find_first(root, ["./bibliographic-data/invention-title", ".//pat:InventionTitle"]))
     claim_nodes = find_first(root, ["./claims", ".//claims"])
@@ -119,13 +130,49 @@ def convert_xml_to_json(xml_text: str) -> Dict[str, Any]:
             if text:
                 claims.append({"num": claim.attrib.get("num", ""), "text": text})
 
+    # IPC classification extraction - support both ST36 and ST96 formats
+    ipc_codes = []
+
+    # ST36 format: .//classification-ipc//main-clsf
     classification_nodes = root.findall(".//classification-ipc//main-clsf") or []
-    ipc_codes = [norm_text("".join(node.itertext())) for node in classification_nodes if norm_text("".join(node.itertext()))]
+    for node in classification_nodes:
+        code = norm_text("".join(node.itertext()))
+        if code:
+            ipc_codes.append(code)
+
+    # ST96 format: .//jppat:SearchField/pat:SearchFieldText
+    if not ipc_codes:
+        search_field_texts = root.findall(".//jppat:SearchField/pat:SearchFieldText", NS) or []
+        for node in search_field_texts:
+            code = norm_text("".join(node.itertext()))
+            # ST96 format uses full-width characters, normalize to half-width
+            if code:
+                # Convert full-width alphanumeric and symbols to half-width
+                code = code.translate(str.maketrans(
+                    'ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ０１２３４５６７８９／',
+                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/'
+                ))
+                # Remove extra spaces
+                code = re.sub(r'\s+', '', code)
+                if code:
+                    ipc_codes.append(code)
+
+    # ST96 format alternative: .//jppat:IPCClassification or .//pat:PatentClassification
+    if not ipc_codes:
+        ipc_nodes = root.findall(".//jppat:IPCClassification", NS) or root.findall(".//pat:PatentClassification", NS) or []
+        for node in ipc_nodes:
+            # Try to extract from MainClassification or similar elements
+            main_class = node.find(".//pat:MainClassification", NS)
+            if main_class is not None:
+                code = norm_text("".join(main_class.itertext()))
+                if code:
+                    ipc_codes.append(code)
 
     return {
+        "patent_id": patent_id,
         "bibliographic": {
             "title": biblio_title,
-            "publication": {},
+            "publication": {"doc_number": patent_id} if patent_id else {},
             "classification": {"ipc": [{"type": "main", "text": code} for code in ipc_codes]},
         },
         "claims": claims,

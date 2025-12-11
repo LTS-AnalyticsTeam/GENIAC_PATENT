@@ -32,7 +32,7 @@ export type AssessmentCandidate = {
 
 export type AlphaInfo = {
   title: string;
-  pub_number: string;
+  pub_number?: string | null;
   claim1: string;
   claims_rest: string[];
 };

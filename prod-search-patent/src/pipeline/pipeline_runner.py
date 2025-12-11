@@ -712,8 +712,9 @@ async def run_pipeline(
 
     # Stage 10: Merge all candidates (30 patents + web results) for analysis
     tracker.start("merge_candidates")
-    combined_results = list(top_results) + list(web_results)
-    logger.info(f"Job %s: Combined results: {len(top_results)} patents + {len(web_results)} web = {len(combined_results)} total", job_id)
+    # Place web results first to ensure they are included in the first 30 candidates for LLM evaluation
+    combined_results = list(web_results) + list(top_results)
+    logger.info(f"Job %s: Combined results: {len(web_results)} web + {len(top_results)} patents = {len(combined_results)} total", job_id)
 
     tracker.update("merge_candidates", {
         "combined_count": len(combined_results),
@@ -744,7 +745,7 @@ async def run_pipeline(
 
         ordered_candidates: List[Dict] = []
 
-        # Process patent results (need Cosmos data)
+        # Process patent results first (priority for evaluation)
         for entry in patent_results:
             pid = entry.get("patent_id")
             if not pid:
@@ -755,7 +756,7 @@ async def run_pipeline(
             else:
                 missing_candidates.append(pid)
 
-        # For web results, create simplified candidate_json
+        # Add web results AFTER patent results (lower priority)
         for entry in web_only_results:
             pid = entry.get("patent_id")
             if not pid:
@@ -847,6 +848,47 @@ async def run_pipeline(
         "web_count": sum(1 for c in final_candidates if c.get("is_web_result")),
     })
     tracker.complete("final_selection")
+
+    # Extract assessments from analysis_payload and attach to each final candidate
+    if analysis_payload:
+        claim1_candidates = analysis_payload.get("claim1_candidates", [])
+        rest_claim_candidates = analysis_payload.get("rest_claim_candidates", [])
+
+        # Create a mapping from patent_id to assessments
+        assessments_map = {}
+        for cand in claim1_candidates:
+            doc_id = cand.get("doc_id")
+            assessments_list = cand.get("assessments", [])
+            if doc_id:
+                assessments_map[doc_id] = assessments_list
+
+        for cand in rest_claim_candidates:
+            doc_id = cand.get("doc_id")
+            assessments_list = cand.get("assessments", [])
+            if doc_id:
+                # Merge with existing assessments if any
+                if doc_id in assessments_map:
+                    assessments_map[doc_id].extend(assessments_list)
+                else:
+                    assessments_map[doc_id] = assessments_list
+
+        # Attach assessments to final_candidates
+        for candidate in final_candidates:
+            patent_id = candidate.get("patent_id")
+            if patent_id in assessments_map:
+                assessments = assessments_map[patent_id]
+                # If this is a web result, force all evidence sections to "web"
+                if candidate.get("is_web_result"):
+                    for assessment in assessments:
+                        for evidence in assessment.get("evidence", []):
+                            evidence["section"] = "web"
+                candidate["assessments"] = assessments
+            else:
+                candidate["assessments"] = []
+    else:
+        # No analysis_payload, set empty assessments for all
+        for candidate in final_candidates:
+            candidate["assessments"] = []
 
     # Prepare full web search results with title and URL
     # Include ALL web results (not just the ones in final_candidates)

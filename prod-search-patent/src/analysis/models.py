@@ -59,11 +59,12 @@ class AssessmentCandidate(BaseModel):
     ipc: List[str] = Field(default_factory=list)
     summary: Optional[str] = None
     source_url: Optional[str] = None
+    is_web_result: bool = False
     year: Optional[int] = Field(default=None, ge=0)
 
 class AlphaInfo(BaseModel):
     title: str
-    pub_number: str
+    pub_number: Optional[str] = None
     claim1: str
     claims_rest: List[str]
 

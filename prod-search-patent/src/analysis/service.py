@@ -116,15 +116,19 @@ class AnalysisService:
             doc_id = candidate_json.get("patent_id") or cand_doc.pub_number or cand_doc.title
             if not doc_id:
                 return None
+            is_web_result = candidate_json.get("is_web_result", False)
+            source_url = candidate_json.get("source_url") if is_web_result else None
+            pub_number = None if is_web_result else (cand_doc.pub_number or candidate_json.get("patent_id"))
             return AssessmentCandidate(
                 doc_id=str(doc_id),
                 title=cand_doc.title or "先行例",
-                pub_number=cand_doc.pub_number or candidate_json.get("patent_id") or "UNKNOWN",
+                pub_number=pub_number,
                 score=0.0,
                 assessments=build_placeholder_assessments(target_claims),
                 ipc=self._extract_ipc_codes(candidate_json) or ["UNKNOWN"],
                 summary=candidate_json.get("summary") or candidate_json.get("abstract"),
-                source_url=None,
+                source_url=source_url,
+                is_web_result=is_web_result,
             )
 
         claim1_pool: List[Dict[str, Any]] = []
@@ -203,8 +207,9 @@ class AnalysisService:
             return selected
 
         used_ids: set[str] = set()
-        # 請求項1: 否定あり優先、なければスコア上位から最低1件
-        claim1_selected = pick_top(claim1_pool, 5, require_denied=True, used_ids=used_ids)
+
+        # 請求項1: 否定あり優先、なければスコア上位から1件のみ
+        claim1_selected = pick_top(claim1_pool, 1, require_denied=True, used_ids=used_ids)
         if not claim1_selected and claim1_pool:
             claim1_selected = pick_top(claim1_pool, 1, require_denied=False, used_ids=used_ids)
 
@@ -400,9 +405,10 @@ class AnalysisService:
         title_override: Optional[str],
     ) -> AlphaInfo:
         claims_rest = [f"請求項{c['num']}: {c['text']}" for c in claims_2_to_5]
+        pub_number = source_doc.pub_number or patent_id or None
         return AlphaInfo(
-            title=title_override or source_doc.title or f"特許{patent_id}",
-            pub_number=source_doc.pub_number or "UNKNOWN",
+            title=title_override or source_doc.title or f"特許{patent_id or 'α'}",
+            pub_number=pub_number,
             claim1=source_doc.claim1 or "",
             claims_rest=claims_rest,
         )
@@ -474,38 +480,55 @@ class AnalysisService:
             max_retries=5,
         )
         parsed = self._parse_llm_response(raw, target_claims)
+        is_web_result = candidate_json.get("is_web_result", False)
+
         assessments: List[ClaimAssessment] = []
         for item in parsed:
+            # Web検索結果の場合、sectionを「web」に統一
+            evidence_list = []
+            for e in item.get("evidence", []):
+                if not e:
+                    continue
+                section = e.get("section", "unknown")
+                # Web検索結果の場合、sectionを「web」に統一（細かい区分は不要）
+                if is_web_result:
+                    section = "web"
+
+                evidence_list.append(
+                    Evidence(
+                        section=section,
+                        quote=e.get("candidate_quote") or e.get("quote", ""),
+                        why=e.get("why", ""),
+                        offset=e.get("offset"),
+                        length=e.get("length"),
+                        alpha_fragment=e.get("alpha_fragment"),
+                        candidate_quote=e.get("candidate_quote") or e.get("quote"),
+                    )
+                )
+
             assessments.append(
                 ClaimAssessment(
                     claim_no=item.get("claim_no", 0),
                     novelty=item.get("novelty", "uncertain"),
                     inventive_step=item.get("inventive_step"),
-                    evidence=[
-                        Evidence(
-                            section=e.get("section", "unknown"),
-                            quote=e.get("candidate_quote") or e.get("quote", ""),
-                            why=e.get("why", ""),
-                            offset=e.get("offset"),
-                            length=e.get("length"),
-                            alpha_fragment=e.get("alpha_fragment"),
-                            candidate_quote=e.get("candidate_quote") or e.get("quote"),
-                        )
-                        for e in item.get("evidence", []) if e
-                    ],
+                    evidence=evidence_list,
                     examiner_hints=item.get("examiner_hints", []) or [],
                 )
             )
 
+        source_url = candidate_json.get("source_url") if is_web_result else None
+        pub_number = None if is_web_result else candidate_doc.pub_number
+
         return AssessmentCandidate(
             doc_id=str(doc_id),
             title=candidate_doc.title or "先行例",
-            pub_number=candidate_doc.pub_number or "UNKNOWN",
+            pub_number=pub_number,
             score=0.75,
             assessments=assessments,
             ipc=ipc_codes or ["UNKNOWN"],
             summary=candidate_json.get("summary") or candidate_json.get("abstract"),
-            source_url=None,
+            source_url=source_url,
+            is_web_result=is_web_result,
         )
 
     def _build_prompt(
@@ -562,6 +585,19 @@ class AnalysisService:
             "【判定対象の請求項（α）】",
             "\n".join(target_claim_lines),
             "",
+        ])
+
+        # Web検索結果の場合は引用ルールを明示
+        if is_web_result:
+            prompt_parts_list.extend([
+                "【重要】この候補はWeb検索結果（論文・技術資料）です：",
+                "- 請求項は存在しないため、引用元sectionは「abstract」または「description」を使用してください",
+                "- candidate_quoteは「要約」または「Web資料の本文抜粋」から引用してください",
+                "- 技術的な内容が一致する場合のみ「denied」と判定してください",
+                "",
+            ])
+
+        prompt_parts_list.extend([
             "以下のJSON形式で返してください。不要な文章は書かないこと。",
             "{",
             '  "assessments": [',
