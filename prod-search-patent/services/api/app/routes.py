@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -12,6 +13,8 @@ from pipeline.job_manager import JobState
 
 from .models import GraphResult, IngestResponse, JobCancelResponse, JobStatusResponse, PipelineResultResponse, KeywordSearchResultResponse, PatentIdTestRequest, WebSearchResultResponse, WebSearchDetail
 from .deps import get_job_manager, get_pipeline_config
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()

@@ -745,7 +745,18 @@ async def run_pipeline(
 
         ordered_candidates: List[Dict] = []
 
-        # IMPORTANT: Add web results FIRST to ensure they are in the first 30 candidates for LLM evaluation
+        # Process patent results first (priority for evaluation)
+        for entry in patent_results:
+            pid = entry.get("patent_id")
+            if not pid:
+                continue
+            candidate_doc = candidate_docs_map.get(pid)
+            if candidate_doc:
+                ordered_candidates.append(candidate_doc)
+            else:
+                missing_candidates.append(pid)
+
+        # Add web results AFTER patent results (lower priority)
         for entry in web_only_results:
             pid = entry.get("patent_id")
             if not pid:
@@ -764,17 +775,6 @@ async def run_pipeline(
                 "page_content": entry.get("page_content", ""),  # URL本文内容を追加
             }
             ordered_candidates.append(web_candidate_json)
-
-        # Process patent results (need Cosmos data) - added AFTER web results
-        for entry in patent_results:
-            pid = entry.get("patent_id")
-            if not pid:
-                continue
-            candidate_doc = candidate_docs_map.get(pid)
-            if candidate_doc:
-                ordered_candidates.append(candidate_doc)
-            else:
-                missing_candidates.append(pid)
 
         tracker.update(
             "analysis",
