@@ -42,7 +42,7 @@ class JobManager:
         return JobState(status=payload.get("status", "unknown"), detail=payload.get("detail", {}))
 
     def store_payload(self, job_id: str, payload: dict) -> None:
-        self.client.set(f"job_payload:{job_id}", json.dumps(payload), ex=60 * 60)
+        self.client.set(f"job_payload:{job_id}", json.dumps(payload), ex=60 * 60 * 24)  # 24 hours
 
     def fetch_payload(self, job_id: str) -> Optional[dict]:
         value = self.client.get(f"job_payload:{job_id}")
