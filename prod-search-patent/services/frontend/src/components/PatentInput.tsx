@@ -310,7 +310,7 @@ const PatentInput: React.FC = () => {
     }
   };
 
-  // ファイルアップロード処理
+  // ファイルアップロード処理（単一ファイル）
   const handleFileUpload = async (index: number, file: File) => {
     if (file && file.type === "text/plain") {
       const updated = [...patents];
@@ -318,6 +318,51 @@ const PatentInput: React.FC = () => {
       setPatents(updated);
     } else {
       alert(".txt (XML) ファイルを選択してください");
+    }
+  };
+
+  // 複数ファイルアップロード処理
+  const handleMultipleFileUpload = (fileList: FileList) => {
+    const files = Array.from(fileList);
+    const txtFiles = files.filter(f => f.type === "text/plain" || f.name.endsWith(".txt"));
+
+    if (txtFiles.length === 0) {
+      alert(".txt (XML) ファイルを選択してください");
+      return;
+    }
+
+    // 最大30件まで
+    const currentFileCount = patents.filter(p => p.file !== null).length;
+    const availableSlots = 30 - currentFileCount;
+    const filesToAdd = txtFiles.slice(0, availableSlots);
+
+    if (filesToAdd.length < txtFiles.length) {
+      alert(`最大30件までです。${filesToAdd.length}件のファイルを追加します。`);
+    }
+
+    // 空きスロットに順次割り当て
+    const updated = [...patents];
+    let fileIndex = 0;
+
+    // 既存の空きスロットに割り当て
+    for (let i = 0; i < updated.length && fileIndex < filesToAdd.length; i++) {
+      if (updated[i].file === null) {
+        updated[i].file = filesToAdd[fileIndex++];
+      }
+    }
+
+    // 必要に応じて新規スロット追加
+    while (fileIndex < filesToAdd.length && updated.length < 30) {
+      updated.push({
+        id: `patent_${updated.length + 1}`,
+        file: filesToAdd[fileIndex++]
+      });
+    }
+
+    setPatents(updated);
+
+    if (filesToAdd.length > 1) {
+      alert(`${filesToAdd.length}件のファイルを追加しました`);
     }
   };
 
@@ -596,9 +641,16 @@ const PatentInput: React.FC = () => {
                 <input
                   type="file"
                   accept=".txt"
-                  onChange={(e) =>
-                    e.target.files && handleFileUpload(index, e.target.files[0])
-                  }
+                  multiple
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      if (e.target.files.length === 1) {
+                        handleFileUpload(index, e.target.files[0]);
+                      } else {
+                        handleMultipleFileUpload(e.target.files);
+                      }
+                    }
+                  }}
                   id={`patent-file-${index}`}
                 />
                 <label
@@ -606,7 +658,7 @@ const PatentInput: React.FC = () => {
                   className="file-upload-label"
                 >
                   <Upload size={20} />
-                  <span>.txt（XML）ファイルをアップロード</span>
+                  <span>.txt（XML）ファイルをアップロード（複数選択可）</span>
                 </label>
                 {patent.file && (
                   <div className="file-info">
