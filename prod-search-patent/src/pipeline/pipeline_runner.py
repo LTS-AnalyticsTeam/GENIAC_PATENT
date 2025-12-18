@@ -380,14 +380,15 @@ async def run_pipeline(
         cosmos_client.close()
 
     trimmed_docs: List[Dict] = []
-    seen_trimmed: set[str] = set()
+    keyword_patent_ids: set[str] = set()
     for patent_id in narrowed_patent_ids[:config.es_stage1_limit]:
-        if patent_id in seen_trimmed:
+        if patent_id in keyword_patent_ids:
             continue
-        seen_trimmed.add(patent_id)
+        keyword_patent_ids.add(patent_id)
         cosmos_doc = narrowed_cosmos_map.get(patent_id, {})
         trimmed_docs.append(
             {
+                "job_id": job_id,
                 "patent_id": patent_id,
                 "title": cosmos_doc.get("title") or parsed.get("title"),
                 "summary": cosmos_doc.get("abstract") or cosmos_doc.get("summary") or parsed.get("summary"),
@@ -438,8 +439,8 @@ async def run_pipeline(
 
     # Stage 5: Stage1 Elasticsearch indexing
     tracker.start("stage1_indexing")
-    if docs_to_embed:
-        success, failures = stage1.bulk_index(docs_to_embed)
+    if enriched_docs:
+        success, failures = stage1.bulk_index(enriched_docs)
     else:
         success, failures = 0, 0
     logger.info(
@@ -476,6 +477,14 @@ async def run_pipeline(
 
     _persist_queries(job_id, generated_queries)
 
+    allowed_patent_ids = {str(doc.get("patent_id")) for doc in trimmed_docs if doc.get("patent_id")}
+    allowed_candidate_count = len(allowed_patent_ids)
+    knn_k = config.es_vector_k
+    knn_num_candidates = config.es_num_candidates
+    if allowed_candidate_count:
+        knn_k = max(1, min(config.es_vector_k, allowed_candidate_count))
+        knn_num_candidates = max(knn_k, min(config.es_num_candidates, allowed_candidate_count))
+
     aggregated_hits: Dict[str, Dict] = {}
     if generated_queries:
         query_vectors: List[List[float]] = []
@@ -488,8 +497,9 @@ async def run_pipeline(
         for query_text, vector in zip(generated_queries, query_vectors):
             hits = stage1.knn_search(
                 vector,
-                k=config.es_vector_k,
-                num_candidates=config.es_num_candidates,
+                k=knn_k,
+                num_candidates=knn_num_candidates,
+                job_id=job_id,
             )
             hits_per_query.append(len(hits))
             for rank, hit in enumerate(hits):
@@ -497,8 +507,11 @@ async def run_pipeline(
                 patent_id = source.get("patent_id") or hit.get("_id")
                 if not patent_id:
                     continue
+                patent_id_str = str(patent_id)
+                if allowed_patent_ids and patent_id_str not in allowed_patent_ids:
+                    continue
                 entry = aggregated_hits.setdefault(
-                    patent_id,
+                    patent_id_str,
                     {
                         "source": source,
                         "score": hit.get("_score", 0.0),
@@ -518,7 +531,7 @@ async def run_pipeline(
                         "score": score,
                     }
                 )
-                entry["source"].setdefault("patent_id", patent_id)
+                entry["source"].setdefault("patent_id", patent_id_str)
 
         sorted_hits = sorted(
             aggregated_hits.values(),
@@ -538,6 +551,7 @@ async def run_pipeline(
             "generated_queries": generated_queries,
             "hits_per_query": hits_per_query,
             "unique_hits": len(vector_docs),
+            "keyword_candidate_count": allowed_candidate_count,
             "top_patent_ids": [doc.get("patent_id") for doc in vector_docs[:10]],
             # 全ヒットを UI で一覧表示できるように保持
             "vector_patent_ids": [doc.get("patent_id") for doc in vector_docs],

@@ -20,29 +20,45 @@ class Stage1ElasticsearchIndexer:
 
     def ensure_index(self) -> None:
         index = self.config.es_stage1_index
-        if self.client.indices.exists(index=index):
-            return
+        created = False
+        if not self.client.indices.exists(index=index):
+            mappings = {
+                "mappings": {
+                    "properties": {
+                        "patent_id": {"type": "keyword"},
+                        "job_id": {"type": "keyword"},
+                        "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                        "summary": {"type": "text"},
+                        "claim1": {"type": "text"},
+                        self.config.es_vector_field: {
+                            "type": "dense_vector",
+                            "dims": self.config.es_vector_dims,
+                            "index": True,
+                            "similarity": "cosine",
+                        },
+                    }
+                },
+                "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+            }
 
-        mappings = {
-            "mappings": {
-                "properties": {
-                    "patent_id": {"type": "keyword"},
-                    "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
-                    "summary": {"type": "text"},
-                    "claim1": {"type": "text"},
-                    self.config.es_vector_field: {
-                        "type": "dense_vector",
-                        "dims": self.config.es_vector_dims,
-                        "index": True,
-                        "similarity": "cosine",
-                    },
-                }
-            },
-            "settings": {"number_of_shards": 1, "number_of_replicas": 0},
-        }
+            self.client.indices.create(index=index, body=mappings)
+            created = True
+            logger.info("Created Stage1 index %s", index)
 
-        self.client.indices.create(index=index, body=mappings)
-        logger.info("Created Stage1 index %s", index)
+        self._ensure_job_id_mapping(index, created)
+
+    def _ensure_job_id_mapping(self, index: str, created: bool) -> None:
+        try:
+            mapping = self.client.indices.get_mapping(index=index)
+            existing_props = mapping.get(index, {}).get("mappings", {}).get("properties", {})
+            if "job_id" in (existing_props or {}):
+                return
+            self.client.indices.put_mapping(index=index, body={"properties": {"job_id": {"type": "keyword"}}})
+            if created:
+                return
+            logger.info("Added job_id field to Stage1 index %s", index)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to ensure job_id mapping on %s: %s", index, exc)
 
     def bulk_index(self, documents: Iterable[dict]) -> Tuple[int, int]:
         def _actions():
@@ -88,6 +104,7 @@ class Stage1ElasticsearchIndexer:
         k: int,
         num_candidates: int,
         source_fields: List[str] | None = None,
+        job_id: str | None = None,
     ) -> List[dict]:
         index = self.config.es_stage1_index
         if not self.client.indices.exists(index=index):
@@ -100,14 +117,18 @@ class Stage1ElasticsearchIndexer:
             "claim1",
         ]
 
+        knn_query = {
+            "field": self.config.es_vector_field,
+            "query_vector": vector,
+            "k": k,
+            "num_candidates": num_candidates,
+        }
+        if job_id:
+            knn_query["filter"] = {"term": {"job_id": job_id}}
+
         response = self.client.search(
             index=index,
-            knn={
-                "field": self.config.es_vector_field,
-                "query_vector": vector,
-                "k": k,
-                "num_candidates": num_candidates,
-            },
+            knn=knn_query,
             size=k,
             _source=fields,
         )
