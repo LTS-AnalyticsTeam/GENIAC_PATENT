@@ -1,15 +1,53 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+from typing import Dict, Iterable, List, Sequence, Set
 
 from azure.cosmos import CosmosClient, exceptions  # type: ignore[import]
+from azure.core.exceptions import ServiceResponseError
 from azure.core.pipeline.transport import RequestsTransport
 
 from .config import PipelineConfig
 from .exceptions import IngestionError, PipelineStageError
 
 logger = logging.getLogger(__name__)
+
+_BULK_LOOKUP_CHUNK_SIZE = 50
+
+_SINGLE_LOOKUP_QUERY = """
+SELECT VALUE c FROM c
+WHERE (IS_DEFINED(c.patent_id) AND c.patent_id = @lookup)
+   OR (IS_DEFINED(c.id) AND c.id = @lookup)
+   OR (
+        IS_DEFINED(c.bibliographic) AND
+        IS_DEFINED(c.bibliographic.publication) AND
+        IS_DEFINED(c.bibliographic.publication.doc_number) AND
+        c.bibliographic.publication.doc_number = @lookup
+      )
+"""
+
+_BULK_LOOKUP_QUERY = """
+SELECT VALUE c FROM c
+WHERE (
+        IS_DEFINED(c.patent_id) AND
+        ARRAY_CONTAINS(@ids, c.patent_id, true)
+      )
+   OR (
+        IS_DEFINED(c.id) AND
+        ARRAY_CONTAINS(@ids, c.id, true)
+      )
+   OR (
+        IS_DEFINED(c.bibliographic) AND
+        IS_DEFINED(c.bibliographic.publication) AND
+        IS_DEFINED(c.bibliographic.publication.doc_number) AND
+        ARRAY_CONTAINS(@ids, c.bibliographic.publication.doc_number, true)
+      )
+"""
+
+
+def _chunked(values: Sequence[str], chunk_size: int) -> Iterable[List[str]]:
+    for index in range(0, len(values), chunk_size):
+        yield list(values[index : index + chunk_size])
 
 
 class _CosmosSafeTransport(RequestsTransport):
@@ -116,31 +154,88 @@ class CosmosPatentClient:
         if not patent_ids:
             return {}
 
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for pid in patent_ids:
+            normalized = (pid or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+
+        if not deduped:
+            return {}
+
         results: Dict[str, Dict] = {}
-        query = """
-        SELECT VALUE c FROM c
-        WHERE (IS_DEFINED(c.patent_id) AND c.patent_id = @lookup)
-           OR (IS_DEFINED(c.id) AND c.id = @lookup)
-           OR (
-                IS_DEFINED(c.bibliographic) AND
-                IS_DEFINED(c.bibliographic.publication) AND
-                IS_DEFINED(c.bibliographic.publication.doc_number) AND
-                c.bibliographic.publication.doc_number = @lookup
-              )
-        """
-        for patent_id in patent_ids:
-            if not patent_id:
+        for chunk in _chunked(deduped, _BULK_LOOKUP_CHUNK_SIZE):
+            if not chunk:
                 continue
             try:
-                iterator = self._container.query_items(
-                    query=query,
-                    parameters=[{"name": "@lookup", "value": patent_id}],
-                    enable_cross_partition_query=True,
-                    max_item_count=1,
+                self._fetch_chunk(chunk, results)
+            except (ServiceResponseError, exceptions.CosmosHttpResponseError) as exc:
+                logger.warning(
+                    "Bulk Cosmos lookup failed for %d ids (fallback to individual queries): %s",
+                    len(chunk),
+                    exc,
                 )
-                for doc in iterator:
-                    results[patent_id] = doc
-                    break
-            except exceptions.CosmosHttpResponseError as exc:  # type: ignore[name-defined]
-                logger.warning("Failed to fetch Cosmos document %s: %s", patent_id, exc)
+                for pid in chunk:
+                    self._fetch_single(pid, results)
         return results
+
+    def _fetch_chunk(self, chunk: Sequence[str], results: Dict[str, Dict]) -> None:
+        chunk_set = set(chunk)
+        iterator = self._container.query_items(
+            query=_BULK_LOOKUP_QUERY,
+            parameters=[{"name": "@ids", "value": list(chunk_set)}],
+            enable_cross_partition_query=True,
+            max_item_count=len(chunk_set),
+        )
+        for doc in iterator:
+            for key in self._candidate_keys(doc):
+                if key in chunk_set and key not in results:
+                    results[key] = doc
+
+        missing = [pid for pid in chunk if pid not in results]
+        if missing:
+            logger.debug("Cosmos chunk lookup missing %d ids, retrying individually", len(missing))
+            for pid in missing:
+                self._fetch_single(pid, results)
+
+    def _fetch_single(self, patent_id: str, results: Dict[str, Dict]) -> None:
+        if patent_id in results:
+            return
+        try:
+            iterator = self._container.query_items(
+                query=_SINGLE_LOOKUP_QUERY,
+                parameters=[{"name": "@lookup", "value": patent_id}],
+                enable_cross_partition_query=True,
+                max_item_count=1,
+            )
+            for doc in iterator:
+                results[patent_id] = doc
+                return
+        except exceptions.CosmosHttpResponseError as exc:
+            logger.warning("Failed to fetch Cosmos document %s: %s", patent_id, exc)
+
+    @staticmethod
+    def _candidate_keys(doc: Dict) -> Set[str]:
+        keys: Set[str] = set()
+        if not isinstance(doc, dict):
+            return keys
+        for field in ("patent_id", "id"):
+            value = doc.get(field)
+            if value:
+                text = str(value).strip()
+                if text:
+                    keys.add(text)
+        try:
+            biblio = doc.get("bibliographic") or {}
+            publication = biblio.get("publication") or {}
+            doc_number = publication.get("doc_number")
+        except AttributeError:
+            doc_number = None
+        if doc_number:
+            text = str(doc_number).strip()
+            if text:
+                keys.add(text)
+        return keys
