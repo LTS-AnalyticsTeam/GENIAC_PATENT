@@ -15,7 +15,8 @@ interface StageProgressProps {
   onShowPatentList?: () => void;
   keywordSearchCount?: number;
   onShowVectorList?: () => void;
-  onShowGraphList?: () => void;
+  onShowRerankList?: () => void;
+  onShowFusionList?: () => void;
 }
 
 const statusColor = (status: StageStatus) => {
@@ -64,7 +65,8 @@ const StageProgress = ({
   onShowPatentList,
   keywordSearchCount,
   onShowVectorList,
-  onShowGraphList,
+  onShowRerankList,
+  onShowFusionList,
 }: StageProgressProps) => {
   const completedCount = stages.filter(
     (stage) => resolveStatus(stage.id, detail) === "completed"
@@ -114,17 +116,28 @@ const StageProgress = ({
               ? (vectorStageDetail?.top_patent_ids as unknown[]).length
               : undefined) ?? undefined;
 
-          const isGraphSearchCompleted =
-            stage.id === "graph_rag" && status === "completed";
-          const graphStageDetail = detail?.stages
-            ?.graph_rag as Record<string, unknown> | undefined;
-          const graphResultCount =
-            (typeof graphStageDetail?.graph_results === "number"
-              ? graphStageDetail.graph_results
-              : Array.isArray(graphStageDetail?.graph_patent_results)
-              ? (graphStageDetail?.graph_patent_results as unknown[]).length
-              : Array.isArray(graphStageDetail?.graph_top_patent_ids)
-              ? (graphStageDetail?.graph_top_patent_ids as unknown[]).length
+          const isRerankCompleted =
+            stage.id === "rerank" && status === "completed";
+          const rerankStageDetail = detail?.stages
+            ?.rerank as Record<string, unknown> | undefined;
+          const rerankResultCount =
+            (typeof rerankStageDetail?.rerank_results === "number"
+              ? rerankStageDetail.rerank_results
+              : Array.isArray(rerankStageDetail?.rerank_patent_results)
+              ? (rerankStageDetail?.rerank_patent_results as unknown[]).length
+              : Array.isArray(rerankStageDetail?.rerank_top_patent_ids)
+              ? (rerankStageDetail?.rerank_top_patent_ids as unknown[]).length
+              : undefined) ?? undefined;
+
+          const isFusionCompleted =
+            stage.id === "fusion" && status === "completed";
+          const fusionStageDetail = detail?.stages
+            ?.fusion as Record<string, unknown> | undefined;
+          const fusionResultCount =
+            (typeof fusionStageDetail?.fusion_top === "number"
+              ? fusionStageDetail.fusion_top
+              : Array.isArray(fusionStageDetail?.fusion_patent_results)
+              ? (fusionStageDetail?.fusion_patent_results as unknown[]).length
               : undefined) ?? undefined;
 
           return (
@@ -170,14 +183,14 @@ const StageProgress = ({
                       ({vectorHitCount.toLocaleString()}件)
                     </a>
                   )}
-                {isGraphSearchCompleted &&
-                  graphResultCount !== undefined &&
-                  onShowGraphList && (
+                {isRerankCompleted &&
+                  rerankResultCount !== undefined &&
+                  onShowRerankList && (
                     <a
                       href="#"
                       onClick={(e) => {
                         e.preventDefault();
-                        onShowGraphList();
+                        onShowRerankList();
                       }}
                       style={{
                         marginLeft: "8px",
@@ -186,7 +199,26 @@ const StageProgress = ({
                         fontSize: "12px",
                       }}
                     >
-                      ({graphResultCount.toLocaleString()}件)
+                      ({rerankResultCount.toLocaleString()}件)
+                    </a>
+                  )}
+                {isFusionCompleted &&
+                  fusionResultCount !== undefined &&
+                  onShowFusionList && (
+                    <a
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        onShowFusionList();
+                      }}
+                      style={{
+                        marginLeft: "8px",
+                        color: "#2563eb",
+                        textDecoration: "underline",
+                        fontSize: "12px",
+                      }}
+                    >
+                      ({fusionResultCount.toLocaleString()}件)
                     </a>
                   )}
               </span>

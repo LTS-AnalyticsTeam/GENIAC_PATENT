@@ -30,6 +30,8 @@ class GraphResult(BaseModel):
     summary: Optional[str] = None
     classification_ipc: Optional[List[str]] = None
     graph_score: Optional[float] = None
+    rerank_score: Optional[float] = None
+    fusion_score: Optional[float] = None
     analysis_status: Optional[str] = None
     analysis_error: Optional[str] = None
     analysis: Optional[Dict[str, Any]] = None
@@ -44,6 +46,7 @@ class PipelineResultResponse(BaseModel):
     job_id: str
     completed_at: datetime
     results: List[GraphResult]
+    fusion_results: List[GraphResult] = Field(default_factory=list)
     pipeline_stats: Dict[str, Any]
     web_search_details: List[WebSearchDetail] = Field(default_factory=list)
 

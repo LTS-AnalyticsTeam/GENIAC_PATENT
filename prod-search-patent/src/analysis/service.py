@@ -207,9 +207,10 @@ class AnalysisService:
             return selected
 
         used_ids: set[str] = set()
+        max_ax = 5
 
-        # 請求項1: 否定あり優先、なければスコア上位から1件のみ
-        claim1_selected = pick_top(claim1_pool, 1, require_denied=True, used_ids=used_ids)
+        # 請求項1: 否定あり優先（最大5件）、なければ上位1件のみ
+        claim1_selected = pick_top(claim1_pool, max_ax, require_denied=True, used_ids=used_ids)
         if not claim1_selected and claim1_pool:
             claim1_selected = pick_top(claim1_pool, 1, require_denied=False, used_ids=used_ids)
 
@@ -226,12 +227,15 @@ class AnalysisService:
             for cand_json in candidates_slice:
                 candidate = build_placeholder_candidate(cand_json, [(1, source_doc.claim1, False)])
                 if candidate and candidate.doc_id not in used_ids:
+                    used_ids.add(candidate.doc_id)
                     placeholder = candidate
                     break
             if not placeholder:
-                placeholder = build_placeholder_candidate(candidates_slice[0], [(1, source_doc.claim1, False)])
+                fallback_candidate = build_placeholder_candidate(candidates_slice[0], [(1, source_doc.claim1, False)])
+                if fallback_candidate and fallback_candidate.doc_id not in used_ids:
+                    used_ids.add(fallback_candidate.doc_id)
+                    placeholder = fallback_candidate
             if placeholder:
-                used_ids.add(placeholder.doc_id)
                 claim1_selected = [placeholder]
 
         if claims_2_to_5 and not rest_selected and candidates_slice:

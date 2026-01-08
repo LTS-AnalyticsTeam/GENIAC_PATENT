@@ -6,11 +6,13 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List
 
 from analysis import AnalysisService, PatentWorkItem
 
+from .cohere_reranker import CohereReranker
 from .config import PipelineConfig
 from .cosmos_client import CosmosPatentClient
 from .elasticsearch_stage1 import Stage1ElasticsearchIndexer
@@ -21,12 +23,16 @@ from .job_manager import JobManager, JobState
 from .parsing_service import load_json_document, parse_text_document
 from .patent_search_pipeline import run_patent_search_from_json
 from .query_generation import QueryGenerator
-from .stage2_indexer import Stage2Indexer
 from .trimming import sort_and_trim
+from .stage2_indexer import Stage2Indexer, StopwordCleaner
 from .web_search_service import search_web_references
 
 logger = logging.getLogger(__name__)
 QUERY_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "query"
+STOPWORDS_PATH = Path(__file__).resolve().parents[2] / "stopwords.txt"
+RERANK_TOP_K = 1000
+FUSION_TOP_K = 100
+GRAPH_CANDIDATE_LIMIT = 1000
 
 
 def _now_iso() -> str:
@@ -40,95 +46,118 @@ def _ensure_detail(detail: Dict | None) -> Dict:
     detail.setdefault("completed_stages", [])
     return detail
 
-
-def _deduplicate_by_patent_id(documents: List[Dict]) -> List[Dict]:
-    seen: set[str] = set()
-    deduped: List[Dict] = []
-    for doc in documents:
-        patent_id = doc.get("patent_id") or doc.get("id")
-        if not patent_id:
-            continue
-        patent_id_str = str(patent_id)
-        if patent_id_str in seen:
-            continue
-        seen.add(patent_id_str)
-        deduped.append(doc)
-    return deduped
-
-
-def _to_ipc_prefixes(ipc_list: Sequence[str]) -> List[str]:
-    prefixes: List[str] = []
-    for ipc in ipc_list:
-        ipc_str = ipc if isinstance(ipc, str) else ""
-        if ipc_str and len(ipc_str) >= 4:
-            s = ipc_str.upper()
-            if "/" in s:
-                s = s.split("/", 1)[0]
-            cleaned = re.sub(r"\\s+", "", s)[:5]
-            if cleaned and cleaned not in prefixes:
-                prefixes.append(cleaned)
-    return prefixes
+def _build_rerank_query(parsed: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    title = parsed.get("title")
+    summary = parsed.get("summary")
+    claim1 = parsed.get("claim1")
+    if title:
+        parts.append(f"Title: {title}")
+    if summary:
+        parts.append(f"Summary: {summary}")
+    if claim1:
+        parts.append(f"Claim1: {claim1}")
+    text = "\n\n".join(part for part in parts if part)
+    return text or parsed.get("title") or parsed.get("summary") or "Patent query"
 
 
-def _extract_section_texts(description: Dict | None) -> List[Dict[str, str]]:
-    """Extract known sections (technical-field, background-art, summary-of-invention, industrial-applicability)."""
-    sections: List[Dict[str, str]] = []
-    if not description:
-        return sections
-    for key in ["technical-field", "background-art", "summary-of-invention", "industrial-applicability"]:
-        value = description.get(key)
-        if not value:
-            continue
-        text = ""
-        if isinstance(value, list):
-            parts = []
-            for entry in value:
-                if isinstance(entry, dict):
-                    parts.append(str(entry.get("text") or ""))
-                else:
-                    parts.append(str(entry))
-            text = " ".join([p for p in parts if p]).strip()
-        elif isinstance(value, dict):
-            text = str(value.get("text") or "")
+@lru_cache(maxsize=1)
+def _load_stopwords() -> List[str]:
+    try:
+        with STOPWORDS_PATH.open("r", encoding="utf-8") as fh:
+            return [line.strip() for line in fh if line.strip()]
+    except FileNotFoundError:
+        logger.warning("Stopwords file not found at %s", STOPWORDS_PATH)
+        return []
+
+
+def _textify(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_textify(item) for item in value if item is not None]
+        return " ".join(part for part in parts if part).strip()
+    if isinstance(value, dict):
+        for key in ("text", "claim_text", "value", "content"):
+            if key in value:
+                return _textify(value.get(key))
+        return ""
+    return str(value).strip()
+
+
+def _extract_description_section(description: Any, key: str) -> str:
+    if isinstance(description, dict):
+        entries = description.get(key) or description.get(key.replace("_", "-"))
+    else:
+        entries = description
+    return _textify(entries)
+
+
+def _extract_claim_one(claims: Any) -> str:
+    if not isinstance(claims, list):
+        return _textify(claims)
+    fallback = ""
+    for claim in claims:
+        if isinstance(claim, dict):
+            num_candidate = ""
+            for key in ("num", "claim-num", "claim_number", "claimNo"):
+                if claim.get(key) is not None:
+                    num_candidate = str(claim.get(key))
+                    break
+            norm = re.sub(r"\D", "", num_candidate or "")
+            text = _textify(claim)
+            if norm == "1":
+                return text
+            if not fallback and text:
+                fallback = text
         else:
-            text = str(value)
-        text = (text or "").strip()
-        if text:
-            sections.append({"type": key, "text": text})
-    return sections
+            text = _textify(claim)
+            if text and not fallback:
+                fallback = text
+    return fallback
 
 
-def _extract_claim_texts(doc: Dict | None, fallback_claim1: str | None = None) -> List[str]:
-    claims: List[str] = []
-    if doc:
-        raw_claims = doc.get("claims") or []
-        if isinstance(raw_claims, list):
-            for entry in raw_claims:
-                if isinstance(entry, dict):
-                    text = entry.get("text") or entry.get("claim_text")
-                    if text:
-                        claims.append(str(text))
-                elif isinstance(entry, str):
-                    claims.append(entry)
-    if not claims and fallback_claim1:
-        claims.append(fallback_claim1)
-    return claims[:3]
+def _extract_patent_text_fields(cosmos_doc: Dict | None, fallback: Dict | None = None) -> Dict[str, str]:
+    result = {"title": "", "abstract": "", "technical_field": "", "claim1": ""}
+    if isinstance(cosmos_doc, dict):
+        biblio = cosmos_doc.get("bibliographic") or {}
+        title_value = cosmos_doc.get("title") or biblio.get("title") or biblio.get("invention_title")
+        if isinstance(title_value, list):
+            for entry in title_value:
+                if isinstance(entry, dict) and entry.get("lang") in {"ja", "JP"}:
+                    result["title"] = _textify(entry)
+                    break
+            if not result["title"]:
+                result["title"] = _textify(title_value)
+        else:
+            result["title"] = _textify(title_value)
 
+        abstract_value = cosmos_doc.get("abstract")
+        if not abstract_value:
+            abstract_value = cosmos_doc.get("summary")
+        result["abstract"] = _textify(abstract_value)
 
-def _extract_citation_texts(description: Dict | None) -> List[str]:
-    citations: List[str] = []
-    if not description:
-        return citations
-    citation_entries = description.get("citation-list") or []
-    if isinstance(citation_entries, list):
-        for entry in citation_entries:
-            if isinstance(entry, dict):
-                txt = entry.get("text")
-                if txt:
-                    citations.append(str(txt))
-            elif isinstance(entry, str):
-                citations.append(entry)
-    return citations
+        description = cosmos_doc.get("description") or {}
+        result["technical_field"] = _extract_description_section(description, "technical-field")
+
+        claims = cosmos_doc.get("claims") or []
+        result["claim1"] = _extract_claim_one(claims)
+
+    if fallback:
+        if not result["title"]:
+            result["title"] = _textify(fallback.get("title"))
+        if not result["abstract"]:
+            result["abstract"] = _textify(fallback.get("summary"))
+        if not result["technical_field"]:
+            result["technical_field"] = _textify(fallback.get("technical_field"))
+        if not result["claim1"]:
+            result["claim1"] = _textify(fallback.get("claim1"))
+
+    return result
 
 
 class StageTracker:
@@ -243,6 +272,25 @@ def _build_alpha_source_json(parsed: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _patent_id_matches(alpha_id: str, candidate: Any) -> bool:
+    if not alpha_id or not candidate:
+        return False
+    a_norm = re.sub(r"\s+", "", str(alpha_id)).upper()
+    b_norm = re.sub(r"\s+", "", str(candidate)).upper()
+    if a_norm == b_norm:
+        return True
+    a_digits = re.sub(r"\D", "", a_norm)
+    b_digits = re.sub(r"\D", "", b_norm)
+    return bool(a_digits and a_digits == b_digits)
+
+
+def _canonical_patent_id(value: Any) -> str:
+    if value is None:
+        return ""
+    text = re.sub(r"\s+", "", str(value)).upper()
+    return text
+
+
 async def run_pipeline(
     config: PipelineConfig,
     job_manager: JobManager,
@@ -252,6 +300,7 @@ async def run_pipeline(
     """Execute full ingestion pipeline and update job state along the way."""
     try:
         config.ensure_embedding_credentials()
+        config.ensure_rerank_credentials()
     except RuntimeError as exc:
         raise PipelineStageError("configuration", str(exc)) from exc
 
@@ -264,6 +313,8 @@ async def run_pipeline(
     except IngestionError:
         parsed = parse_text_document(payload_bytes)
     alpha_source_json = _build_alpha_source_json(parsed)
+    alpha_patent_id_raw = parsed.get("patent_id") or alpha_source_json.get("bibliographic", {}).get("publication", {}).get("doc_number")
+    alpha_patent_id = str(alpha_patent_id_raw).strip() if alpha_patent_id_raw else ""
     tracker.complete("parsing")
 
     ipc_codes = parsed["classification_ipc"]
@@ -362,12 +413,31 @@ async def run_pipeline(
     search_result = run_patent_search_from_json(cosmos_format_json, job_manager, job_id)
 
     narrowed_patent_ids = search_result.get("keyword_search_results", [])
+    keyword_score_map: Dict[str, float] = {}
+    for entry in search_result.get("search_results", []) or []:
+        doc_number = entry.get("doc_number")
+        if not doc_number:
+            continue
+        canon = _canonical_patent_id(doc_number)
+        if not canon:
+            continue
+        try:
+            score = float(entry.get("score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        keyword_score_map[canon] = score
+    removed_self_id = 0
+    if alpha_patent_id:
+        before = len(narrowed_patent_ids)
+        narrowed_patent_ids = [pid for pid in narrowed_patent_ids if not _patent_id_matches(alpha_patent_id, pid)]
+        removed_self_id = before - len(narrowed_patent_ids)
     logger.info("Job %s: Keyword search returned %d patents", job_id, len(narrowed_patent_ids))
 
     tracker.update("keyword_search", {
         "narrowed_count": len(narrowed_patent_ids),
         "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
         "stage2_keyword_filter_results": search_result.get("pipeline_stats", {}).get("stage2_keyword_filter_results", 0),
+        "removed_self_patent": removed_self_id,
     })
     tracker.complete("keyword_search")
 
@@ -385,6 +455,8 @@ async def run_pipeline(
         if patent_id in keyword_patent_ids:
             continue
         keyword_patent_ids.add(patent_id)
+        canon_id = _canonical_patent_id(patent_id)
+        kw_score = keyword_score_map.get(canon_id, 0.0)
         cosmos_doc = narrowed_cosmos_map.get(patent_id, {})
         trimmed_docs.append(
             {
@@ -393,6 +465,7 @@ async def run_pipeline(
                 "title": cosmos_doc.get("title") or parsed.get("title"),
                 "summary": cosmos_doc.get("abstract") or cosmos_doc.get("summary") or parsed.get("summary"),
                 "claim1": cosmos_doc.get("claim1") or parsed.get("claim1"),
+                "keyword_score": kw_score,
             }
         )
 
@@ -461,6 +534,8 @@ async def run_pipeline(
     # Stage 6: Vector search over Stage1 index
     tracker.start("vector_search")
     vector_docs: List[Dict] = []
+    keyword_max_score = 0.0
+    vector_max_score = 0.0
     generated_queries: List[str] = []
     hits_per_query: List[int] = []
     try:
@@ -545,6 +620,21 @@ async def run_pipeline(
             doc["vector_matched_queries"] = [match["query"] for match in item["matches"][:3]]
             vector_docs.append(doc)
 
+    if vector_docs:
+        for doc in vector_docs:
+            try:
+                kw_score = float(doc.get("keyword_score") or 0.0)
+            except (TypeError, ValueError):
+                kw_score = 0.0
+            try:
+                vec_score = float(doc.get("vector_score") or 0.0)
+            except (TypeError, ValueError):
+                vec_score = 0.0
+            if kw_score > keyword_max_score:
+                keyword_max_score = kw_score
+            if vec_score > vector_max_score:
+                vector_max_score = vec_score
+
     tracker.update(
         "vector_search",
         {
@@ -559,149 +649,267 @@ async def run_pipeline(
     )
     tracker.complete("vector_search")
 
-    # Stage 7: Neo4j enrichment
-    tracker.start("stage2_indexing")
-    stage2 = Stage2Indexer(config)
-    stage2.reset_graph()
-    tracker.update("stage2_indexing", {"graph_reset": True})
-    stage2_docs = vector_docs if vector_docs else enriched_docs
-    stage2_docs = _deduplicate_by_patent_id(stage2_docs)
-
-    cosmos_client = CosmosPatentClient(config)
-    try:
-        stage2_cosmos_map = cosmos_client.fetch_by_patent_ids(
-            [doc.get("patent_id") for doc in stage2_docs if doc.get("patent_id")]
-        )
-    finally:
-        cosmos_client.close()
-
-    def _extract_classification(doc: Dict) -> List[str]:
-        biblio = doc.get("bibliographic") or {}
-        classification = biblio.get("classification") or {}
-        ipc_entries = classification.get("ipc") or []
-        codes: List[str] = []
-        for entry in ipc_entries:
-            if isinstance(entry, dict):
-                text = entry.get("text") or entry.get("value")
-            else:
-                text = entry
-            if text:
-                text = str(text).strip()
-                if text and text not in codes:
-                    codes.append(text)
-        top_level = doc.get("classification_ipc")
-        if isinstance(top_level, list):
-            for value in top_level:
-                if not value:
-                    continue
-                text = str(value).strip()
-                if text and text not in codes:
-                    codes.append(text)
-        return codes
-
-    alpha_id = parsed.get("patent_id") or alpha_source_json.get("bibliographic", {}).get("publication", {}).get("doc_number")
-    alpha_description = alpha_source_json.get("description") if isinstance(alpha_source_json, dict) else None
-    alpha_sections = _extract_section_texts(alpha_description)
-    if not alpha_sections:
-        # フォールバック: タイトル・サマリーをセクションとして扱う
-        if parsed.get("title"):
-            alpha_sections.append({"type": "technical-field", "text": str(parsed.get("title"))})
-        if parsed.get("summary"):
-            alpha_sections.append({"type": "summary-of-invention", "text": str(parsed.get("summary"))})
-    alpha_claims = _extract_claim_texts(alpha_source_json, fallback_claim1=parsed.get("claim1"))
-    alpha_citations = _extract_citation_texts(alpha_description)
-    alpha_ipc_codes = parsed.get("classification_ipc") or []
-
-    stage2_graph_docs: List[Dict] = []
-    if alpha_id:
-        stage2_graph_docs.append(
-            {
-                "patent_id": alpha_id,
-                "title": parsed.get("title"),
-                "summary": parsed.get("summary"),
-                "classification_ipc": alpha_ipc_codes,
-                "ipc_prefixes": _to_ipc_prefixes(alpha_ipc_codes),
-                "sections": alpha_sections,
-                "claims": alpha_claims,
-                "citation_texts": alpha_citations,
-                "vector_score": None,
-            }
-        )
-
-    for doc in stage2_docs:
-        pid = doc.get("patent_id")
-        if not pid:
+    # Stage 7: Graph reset + indexing with Cosmos payloads
+    tracker.start("graph_ingest", {"vector_candidates": len(vector_docs)})
+    cleaner = StopwordCleaner(_load_stopwords())
+    graph_documents: List[Dict] = []
+    graph_scores: Dict[str, float] = {}
+    seen_graph_ids: set[str] = set()
+    graph_candidate_ids = []
+    for candidate in vector_docs:
+        pid = candidate.get("patent_id")
+        if not pid or pid in seen_graph_ids:
             continue
-        cosmos_doc = stage2_cosmos_map.get(pid) or {}
-        biblio = cosmos_doc.get("bibliographic") or {}
-        classification = _extract_classification(cosmos_doc)
-        description = cosmos_doc.get("description") if isinstance(cosmos_doc, dict) else None
-        sections = _extract_section_texts(description)
-        claims = _extract_claim_texts(cosmos_doc, fallback_claim1=doc.get("claim1"))
-        citations = _extract_citation_texts(description)
-
-        graph_doc = {
-            "patent_id": pid,
-            "title": cosmos_doc.get("title") or doc.get("title"),
-            "summary": cosmos_doc.get("abstract") or cosmos_doc.get("summary") or doc.get("summary"),
-            "classification_ipc": classification or doc.get("classification_ipc"),
-            "ipc_prefixes": _to_ipc_prefixes(classification or doc.get("classification_ipc") or []),
-            "sections": sections,
-            "claims": claims,
-            "citation_texts": citations,
-            "vector_score": doc.get("vector_score"),
-            "publication": biblio.get("publication"),
+        seen_graph_ids.add(pid)
+        graph_candidate_ids.append(pid)
+    cosmos_graph_map: Dict[str, Dict] = {}
+    if graph_candidate_ids:
+        cosmos_graph = CosmosPatentClient(config)
+        try:
+            cosmos_graph_map = cosmos_graph.fetch_by_patent_ids(graph_candidate_ids[:GRAPH_CANDIDATE_LIMIT])
+        finally:
+            cosmos_graph.close()
+    stage2_indexer = Stage2Indexer(config, cleaner=cleaner)
+    alpha_graph_document: Dict[str, Any] | None = None
+    if alpha_patent_id:
+        alpha_fields = _extract_patent_text_fields(alpha_source_json, parsed)
+        alpha_graph_document = {
+            "patent_id": alpha_patent_id,
+            "title": alpha_fields.get("title"),
+            "abstract": alpha_fields.get("abstract"),
+            "technical_field": alpha_fields.get("technical_field"),
+            "claim1": alpha_fields.get("claim1"),
+            "vector_score": None,
         }
-        stage2_graph_docs.append(graph_doc)
-
-    stage2_graph_docs = _deduplicate_by_patent_id(stage2_graph_docs)
-    stage2.upsert_graph(stage2_graph_docs)
+    indexed_documents = 0
+    try:
+        stage2_indexer.reset_graph()
+        documents_to_index: List[Dict] = []
+        if alpha_graph_document:
+            documents_to_index.append(alpha_graph_document)
+        if graph_candidate_ids:
+            processed_ids: set[str] = set()
+            for doc in vector_docs[:GRAPH_CANDIDATE_LIMIT]:
+                pid = doc.get("patent_id")
+                if not pid or pid in processed_ids:
+                    continue
+                processed_ids.add(pid)
+                source_doc = cosmos_graph_map.get(pid)
+                extracted = _extract_patent_text_fields(source_doc, doc)
+                cleaned_fields = {
+                    "title": cleaner.clean_text(extracted.get("title")),
+                    "abstract": cleaner.clean_text(extracted.get("abstract")),
+                    "technical_field": cleaner.clean_text(extracted.get("technical_field")),
+                    "claim1": cleaner.clean_text(extracted.get("claim1")),
+                }
+                if cleaned_fields["title"]:
+                    doc["title"] = cleaned_fields["title"]
+                if cleaned_fields["abstract"]:
+                    doc["summary"] = cleaned_fields["abstract"]
+                if cleaned_fields["claim1"]:
+                    doc["claim1"] = cleaned_fields["claim1"]
+                candidate_payload = {
+                    "patent_id": pid,
+                    "title": extracted.get("title"),
+                    "abstract": extracted.get("abstract"),
+                    "technical_field": extracted.get("technical_field"),
+                    "claim1": extracted.get("claim1"),
+                    "vector_score": doc.get("vector_score"),
+                }
+                graph_documents.append(candidate_payload)
+                documents_to_index.append(candidate_payload)
+        if documents_to_index:
+            indexed_documents = stage2_indexer.index_documents(documents_to_index)
+    finally:
+        stage2_indexer.close()
     tracker.update(
-        "stage2_indexing",
+        "graph_ingest",
         {
-            "ingested_documents": len(stage2_graph_docs),
-            "source": "vector_search" if vector_docs else "cosmos_trimmed",
+            "graph_candidates": len(graph_documents),
+            "graph_indexed": indexed_documents,
+            "alpha_indexed": bool(alpha_graph_document),
         },
     )
-    tracker.complete("stage2_indexing")
+    tracker.complete("graph_ingest")
 
-    # Stage 8: Graph-RAG ranking
-    tracker.start("graph_rag")
-    rag = GraphRAGService(config)
-    top_results = rag.top_k([doc.get("patent_id") for doc in stage2_docs], alpha_id=alpha_id or "", k=30)
-    top_results = _deduplicate_by_patent_id(top_results)
+    # Stage 8: Graph-RAG scoring from alpha patent
+    tracker.start("graph_rag", {"graph_candidates": len(graph_candidate_ids)})
+    graph_ranked: List[Dict] = []
+    graph_max_score = 0.0
+    if graph_candidate_ids:
+        graph_service = GraphRAGService(config)
+        try:
+            graph_ranked = graph_service.top_k(
+                [pid for pid in graph_candidate_ids[:GRAPH_CANDIDATE_LIMIT] if pid],
+                alpha_patent_id or None,
+                k=min(GRAPH_CANDIDATE_LIMIT, len(graph_candidate_ids)),
+            )
+        finally:
+            graph_service.close()
+        for entry in graph_ranked:
+            pid = entry.get("patent_id")
+            if not pid:
+                continue
+            raw_score = entry.get("graph_score") or 0.0
+            graph_scores[pid] = raw_score
+            if raw_score > graph_max_score:
+                graph_max_score = raw_score
     tracker.update(
         "graph_rag",
         {
-            "graph_results": len(top_results),
-            "graph_top_patent_ids": [entry.get("patent_id") for entry in top_results[:10]],
-            "graph_top_results": [
-                {
-                    "patent_id": entry.get("patent_id"),
-                    "title": entry.get("title"),
-                    "graph_score": entry.get("graph_score"),
-                    "vector_score": entry.get("vector_score"),
-                }
-                for entry in top_results[:10]
-            ],
-            # 全件（k件）を UI で一覧表示できるように保持
-            "graph_patent_results": [
-                {
-                    "patent_id": entry.get("patent_id"),
-                    "title": entry.get("title"),
-                    "graph_score": entry.get("graph_score"),
-                    "vector_score": entry.get("vector_score"),
-                }
-                for entry in top_results
-                if entry.get("patent_id")
-            ],
+            "graph_ranked": len(graph_ranked),
+            "graph_scored_patent_ids": [entry.get("patent_id") for entry in graph_ranked[:10]],
+            "graph_score_max": graph_max_score,
         },
     )
-    rag.close()
-    stage2.close()
     tracker.complete("graph_rag")
 
-    # Stage 9: Web search for additional references
+    # Stage 9: Cohere reranking
+    tracker.start("rerank", {"vector_candidates": len(vector_docs)})
+    reranked_docs: List[Dict] = []
+    rerank_max_score = 0.0
+    rerank_query = _build_rerank_query(parsed)
+    rerank_details: Dict[str, Any] = {
+        "rerank_results": 0,
+        "rerank_top_patent_ids": [],
+        "rerank_top_results": [],
+        "rerank_patent_results": [],
+        "rerank_query_preview": rerank_query[:200],
+    }
+    if vector_docs:
+        reranker = CohereReranker(config)
+        try:
+            reranked_docs = reranker.rerank(rerank_query, vector_docs, top_n=RERANK_TOP_K)
+        except Exception as exc:
+            logger.warning("Job %s: Cohere rerank failed, falling back to vector order: %s", job_id, exc)
+            fallback_docs: List[Dict] = []
+            for doc in vector_docs[:RERANK_TOP_K]:
+                copied = dict(doc)
+                copied.setdefault("rerank_score", doc.get("vector_score"))
+                fallback_docs.append(copied)
+            reranked_docs = fallback_docs
+            rerank_details["rerank_error"] = str(exc)
+        rerank_details.update(
+            {
+                "rerank_results": len(reranked_docs),
+                "rerank_top_patent_ids": [doc.get("patent_id") for doc in reranked_docs[:10]],
+                "rerank_top_results": [
+                    {
+                        "patent_id": doc.get("patent_id"),
+                        "title": doc.get("title"),
+                        "rerank_score": doc.get("rerank_score"),
+                        "vector_score": doc.get("vector_score"),
+                    }
+                    for doc in reranked_docs[:10]
+                    if doc.get("patent_id")
+                ],
+                "rerank_patent_results": [
+                    {
+                        "patent_id": doc.get("patent_id"),
+                        "title": doc.get("title"),
+                        "rerank_score": doc.get("rerank_score"),
+                        "vector_score": doc.get("vector_score"),
+                    }
+                    for doc in reranked_docs
+                    if doc.get("patent_id")
+                ],
+            }
+        )
+    if reranked_docs:
+        for doc in reranked_docs:
+            try:
+                rerank_val = float(doc.get("rerank_score") or 0.0)
+            except (TypeError, ValueError):
+                rerank_val = 0.0
+            if rerank_val > rerank_max_score:
+                rerank_max_score = rerank_val
+    tracker.update("rerank", rerank_details)
+    tracker.complete("rerank")
+
+    # Stage 10: Fuse rerank + graph scores and keep top 100
+    tracker.start(
+        "fusion",
+        {
+            "rerank_results": len(reranked_docs),
+            "graph_scored": len(graph_scores),
+        },
+    )
+    fused_candidates: List[Dict] = []
+    fusion_serializable: List[Dict] = []
+    if reranked_docs:
+        for doc in reranked_docs:
+            pid = doc.get("patent_id")
+            graph_raw = graph_scores.get(pid, 0.0) if pid else 0.0
+            if graph_max_score > 0:
+                graph_score = graph_raw / graph_max_score
+            else:
+                graph_score = 0.0
+            rerank_score = doc.get("rerank_score")
+            try:
+                rerank_value = float(rerank_score) if rerank_score is not None else 0.0
+            except (TypeError, ValueError):
+                rerank_value = 0.0
+            rerank_norm = rerank_value / rerank_max_score if rerank_max_score > 0 else 0.0
+            keyword_raw = doc.get("keyword_score") or 0.0
+            try:
+                keyword_value = float(keyword_raw)
+            except (TypeError, ValueError):
+                keyword_value = 0.0
+            keyword_norm = keyword_value / keyword_max_score if keyword_max_score > 0 else 0.0
+            vector_raw = doc.get("vector_score") or 0.0
+            try:
+                vector_value = float(vector_raw)
+            except (TypeError, ValueError):
+                vector_value = 0.0
+            vector_norm = vector_value / vector_max_score if vector_max_score > 0 else 0.0
+            doc["graph_score_raw"] = graph_raw
+            doc["graph_score"] = graph_score
+            doc["keyword_score"] = keyword_value
+            doc["keyword_score_norm"] = keyword_norm
+            doc["vector_score_norm"] = vector_norm
+            doc["rerank_score_norm"] = rerank_norm
+            doc["fusion_score"] = (
+                keyword_norm * 0.2
+                + rerank_norm * 0.4
+                + vector_norm * 0.3
+                + graph_score * 0.1
+            )
+            fused_candidates.append(doc)
+        fused_candidates.sort(key=lambda item: item.get("fusion_score", 0.0), reverse=True)
+    selected_patent_candidates = fused_candidates[:FUSION_TOP_K]
+    fusion_serializable = []
+    for doc in selected_patent_candidates:
+        pid = doc.get("patent_id")
+        if not pid:
+            continue
+        fusion_serializable.append(
+            {
+                "patent_id": pid,
+                "title": doc.get("title"),
+                "summary": doc.get("summary") or doc.get("abstract"),
+                "graph_score": doc.get("graph_score"),
+                "graph_score_raw": doc.get("graph_score_raw"),
+                "keyword_score": doc.get("keyword_score"),
+                "keyword_score_norm": doc.get("keyword_score_norm"),
+                "rerank_score": doc.get("rerank_score"),
+                "rerank_score_norm": doc.get("rerank_score_norm"),
+                "fusion_score": doc.get("fusion_score"),
+                "vector_score": doc.get("vector_score"),
+                "vector_score_norm": doc.get("vector_score_norm"),
+            }
+        )
+    tracker.update(
+        "fusion",
+        {
+            "fusion_candidates": len(fused_candidates),
+            "fusion_top": len(selected_patent_candidates),
+            "fusion_top_patent_ids": [doc.get("patent_id") for doc in selected_patent_candidates[:10]],
+            "fusion_patent_results": fusion_serializable,
+        },
+    )
+    tracker.complete("fusion")
+
+    # Stage 11: Web search for additional references
     tracker.start("web_search")
     web_results: List[Dict] = []
     claim1_text = parsed.get("claim1", "")
@@ -724,24 +932,30 @@ async def run_pipeline(
     })
     tracker.complete("web_search")
 
-    # Stage 10: Merge all candidates (30 patents + web results) for analysis
+    # Stage 12: Merge all candidates (100 patents + web results) for analysis
     tracker.start("merge_candidates")
-    # Place web results first to ensure they are included in the first 30 candidates for LLM evaluation
-    combined_results = list(web_results) + list(top_results)
-    logger.info(f"Job %s: Combined results: {len(web_results)} web + {len(top_results)} patents = {len(combined_results)} total", job_id)
+    combined_results = list(selected_patent_candidates) + list(web_results)
+    logger.info(
+        f"Job %s: Combined results: {len(selected_patent_candidates)} patents + {len(web_results)} web = {len(combined_results)} total",
+        job_id,
+    )
 
-    tracker.update("merge_candidates", {
-        "combined_count": len(combined_results),
-        "patent_count": len(top_results),
-        "web_count": len(web_results),
-    })
+    tracker.update(
+        "merge_candidates",
+        {
+            "combined_count": len(combined_results),
+            "patent_count": len(selected_patent_candidates),
+            "web_count": len(web_results),
+        },
+    )
     tracker.complete("merge_candidates")
 
-    # Stage 11: Analyze ALL combined candidates (30+ candidates)
+    # Stage 13: Analyze ALL combined candidates (100+ candidates)
     tracker.start("analysis", {"analysis_candidates": len(combined_results)})
     analysis_service = AnalysisService()
     all_analysis_results: List[Dict] = []  # 全候補の分析結果を保存
     missing_candidates: List[str] = []
+    analysis_payload: Dict[str, Any] | None = None
 
     if combined_results:
         # Separate patent results and web results from ALL combined results
@@ -833,7 +1047,7 @@ async def run_pipeline(
 
     tracker.complete("analysis")
 
-    # Stage 12: Select top 10 from analyzed candidates using LLM
+    # Stage 14: Select top 10 from analyzed candidates using LLM
     tracker.start("final_selection")
 
     # AnalysisServiceを使って候補選択
@@ -920,6 +1134,7 @@ async def run_pipeline(
 
     final_payload = {
         "results": final_candidates,  # 選択された上位10件を返す
+        "fusion_results": fusion_serializable,
         "keyword_search_results": narrowed_patent_ids,
         "search_results": search_result.get("search_results", []),
         "web_search_results": [r.get("patent_id") for r in web_results],
@@ -932,8 +1147,14 @@ async def run_pipeline(
             "stage1_embedded": len(docs_to_embed),
             "vector_search_results": len(vector_docs),
             "vector_queries": len(generated_queries),
+            "graph_candidates": len(graph_documents),
+            "graph_indexed": indexed_documents,
+            "graph_ranked": len(graph_scores),
+            "rerank_results": len(reranked_docs),
+            "fusion_candidates": len(fused_candidates),
+            "fusion_top": len(selected_patent_candidates),
             "web_search_results": len(web_results),
-            "analysis_candidates": len(combined_results),  # 分析した候補数（30+）
+            "analysis_candidates": len(combined_results),  # 分析した候補数（100+）
             "final_candidates": len(final_candidates),  # 最終選択数（10）
             "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
             "stage2_keyword_filter_results": len(narrowed_patent_ids),
