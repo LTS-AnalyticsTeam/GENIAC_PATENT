@@ -134,9 +134,18 @@ def run_patent_search_from_json(json_payload: dict, job_manager=None, job_id: st
     logger.info(f"STAGE1 candidates: {len(candidates):,}")
 
     # STEP4: STAGE2 キーワードスコアリング
-    logger.info("STEP4: STAGE2 keyword scoring...")
-    scored = stage2_keyword_scoring_fast(candidates, keywords, patent, limit=10000)
-    logger.info(f"STAGE2 results: {len(scored):,}")
+    # IPC候補が10,000件以下の場合、キーワード検索をスキップして精度を改善
+    stage2_skipped = False
+    if len(candidates) <= 10000:
+        logger.info(f"STAGE1 candidates <= 10,000. Skipping STAGE2 keyword scoring to improve recall.")
+        # IPC候補をそのままスコア付きリストに変換（スコアは0.0で統一）
+        scored = [(doc_num, 0.0) for doc_num in candidates[:10000]]
+        logger.info(f"STAGE2 results (skipped): {len(scored):,}")
+        stage2_skipped = True
+    else:
+        logger.info("STEP4: STAGE2 keyword scoring...")
+        scored = stage2_keyword_scoring_fast(candidates, keywords, patent, limit=10000)
+        logger.info(f"STAGE2 results: {len(scored):,}")
 
     elapsed = time.time() - start_time
 
@@ -146,6 +155,7 @@ def run_patent_search_from_json(json_payload: dict, job_manager=None, job_id: st
         "pipeline_stats": {
             "stage1_IPC_candidates": len(candidates),
             "stage2_keyword_filter_results": len(scored),
+            "stage2_skipped": stage2_skipped,
             "total_keywords": total_keywords,
             "elapsed_seconds": round(elapsed, 2)
         },
