@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 QUERY_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "query"
 STOPWORDS_PATH = Path(__file__).resolve().parents[2] / "stopwords.txt"
 RERANK_TOP_K = 1000
-FUSION_TOP_K = 100
+FUSION_TOP_K = 50
 GRAPH_CANDIDATE_LIMIT = 1000
 
 
@@ -826,7 +826,7 @@ async def run_pipeline(
     tracker.update("rerank", rerank_details)
     tracker.complete("rerank")
 
-    # Stage 10: Fuse rerank + graph scores and keep top 100
+    # Stage 10: Fuse rerank + graph scores and keep top 50
     tracker.start(
         "fusion",
         {
@@ -932,7 +932,7 @@ async def run_pipeline(
     })
     tracker.complete("web_search")
 
-    # Stage 12: Merge all candidates (100 patents + web results) for analysis
+    # Stage 12: Merge all candidates (50 patents + web results) for analysis
     tracker.start("merge_candidates")
     combined_results = list(selected_patent_candidates) + list(web_results)
     logger.info(
@@ -950,7 +950,7 @@ async def run_pipeline(
     )
     tracker.complete("merge_candidates")
 
-    # Stage 13: Analyze ALL combined candidates (100+ candidates)
+    # Stage 13: Analyze ALL combined candidates (50+ candidates)
     tracker.start("analysis", {"analysis_candidates": len(combined_results)})
     analysis_service = AnalysisService()
     all_analysis_results: List[Dict] = []  # 全候補の分析結果を保存
@@ -1154,7 +1154,7 @@ async def run_pipeline(
             "fusion_candidates": len(fused_candidates),
             "fusion_top": len(selected_patent_candidates),
             "web_search_results": len(web_results),
-            "analysis_candidates": len(combined_results),  # 分析した候補数（100+）
+            "analysis_candidates": len(combined_results),  # 分析した候補数（50+）
             "final_candidates": len(final_candidates),  # 最終選択数（10）
             "stage1_IPC_candidates": search_result.get("pipeline_stats", {}).get("stage1_IPC_candidates", 0),
             "stage2_keyword_filter_results": len(narrowed_patent_ids),
