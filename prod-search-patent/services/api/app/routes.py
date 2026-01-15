@@ -120,12 +120,14 @@ def get_result(job_id: str, job_manager: JobManager = Depends(get_job_manager)) 
     if not result_payload:
         raise HTTPException(status_code=404, detail="Result unavailable")
     results = [GraphResult(**item) for item in result_payload.get("results", [])]
+    fusion_results = [GraphResult(**item) for item in result_payload.get("fusion_results", [])]
     web_details_raw = result_payload.get("web_search_details", [])
     web_details = [WebSearchDetail(**item) for item in web_details_raw]
     return PipelineResultResponse(
         job_id=job_id,
         completed_at=datetime.now(timezone.utc),
         results=results,
+        fusion_results=fusion_results,
         pipeline_stats=result_payload.get("pipeline_stats", {}),
         web_search_details=web_details,
     )

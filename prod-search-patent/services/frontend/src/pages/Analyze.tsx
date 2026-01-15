@@ -2,8 +2,7 @@ import { FormEvent, useState } from "react";
 import ResultCard from "../components/ResultCard";
 import { AnalysisResponse, Candidate } from "../types";
 import "./Analyze.css";
-
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
+import { apiFetch } from "../lib/apiClient";
 
 const Analyze = () => {
   const [patentFile, setPatentFile] = useState<File | null>(null);
@@ -35,7 +34,7 @@ const Analyze = () => {
       }
       
       // APIに送信（source_jsonのみ送信、candidate_jsonはバックエンドが自動で探す）
-      const response = await fetch(`${API_BASE}/api/analyze`, {
+      const response = await apiFetch(`/api/analyze`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -80,7 +79,7 @@ const Analyze = () => {
     
     try {
       // デモ用：バックエンドの.env設定のデータを使用
-      const response = await fetch(`${API_BASE}/api/analyze`, {
+      const response = await apiFetch(`/api/analyze`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

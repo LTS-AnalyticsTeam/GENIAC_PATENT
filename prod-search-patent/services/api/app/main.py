@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 
 settings = get_settings()
 
-app = FastAPI(title="Patent Graph-RAG API", version="1.0.0")
+app = FastAPI(title="Patent Search API", version="1.0.0")
 
 if settings.cors_origins() == ["*"]:
     app.add_middleware(
@@ -47,5 +47,4 @@ async def ingestion_error_handler(request: Request, exc: IngestionError):
 
 @app.get("/")
 def root():
-    return {"message": "Patent Graph-RAG API", "version": "1.0.0"}
-
+    return {"message": "Patent Search API", "version": "1.0.0"}

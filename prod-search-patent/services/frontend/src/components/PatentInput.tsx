@@ -13,11 +13,8 @@ import {
 import "./PatentInput.css";
 import StageProgress from "./StageProgress";
 import { StageDetail, SearchResultItem } from "../types";
+import { apiFetch } from "../lib/apiClient";
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ??
-  import.meta.env.VITE_API_BASE ??
-  "http://localhost:8080";
 const STORAGE_KEY = "ps-job-state";
 const RESULT_CACHE_PREFIX = "ps-result-cache";
 const POLL_INTERVAL_MS = 3000;
@@ -27,8 +24,8 @@ const STAGES = [
   { id: "keyword_search", label: "② キーワード検索" },
   { id: "embedding", label: "③ 埋め込み生成" },
   { id: "vector_search", label: "④ ベクトル検索" },
-  { id: "stage2_indexing", label: "⑤ Graph登録" },
-  { id: "graph_rag", label: "⑥ Graph検索" },
+  { id: "rerank", label: "⑤ リランキング" },
+  { id: "fusion", label: "⑥ Graph-RAG統合" },
   { id: "analysis", label: "⑦ 特許分析" },
 ];
 
@@ -39,8 +36,8 @@ const STAGE_LABELS: Record<string, string> = {
   embedding: "③ 埋め込み生成",
   stage1_indexing: "④ ベクトル検索",
   vector_search: "④ ベクトル検索",
-  stage2_indexing: "⑤ Graph登録",
-  graph_rag: "⑥ Graph検索",
+  rerank: "⑤ リランキング",
+  fusion: "⑥ Graph-RAG統合",
   analysis: "⑦ 特許分析",
 };
 
@@ -52,7 +49,22 @@ interface PatentSlot {
 type JobResultPayload = {
   job_id: string;
   completed_at: string;
-  results: Array<{ patent_id: string; analysis_status?: string }>;
+  results: Array<{
+    patent_id: string;
+    analysis_status?: string;
+    title?: string;
+    rerank_score?: number;
+    graph_score?: number;
+    vector_score?: number;
+  }>;
+  fusion_results?: Array<{
+    patent_id: string;
+    title?: string;
+    rerank_score?: number;
+    graph_score?: number;
+    fusion_score?: number;
+    vector_score?: number;
+  }>;
   pipeline_stats: Record<string, unknown>;
 };
 
@@ -141,14 +153,27 @@ const PatentInput: React.FC = () => {
     generatedQueries?: string[];
     hitsPerQuery?: number[];
   } | null>(null);
-  // Graph検索結果モーダル用state
-  const [showGraphListModal, setShowGraphListModal] = useState(false);
-  const [graphListData, setGraphListData] = useState<{
+  // リランキング結果モーダル用state
+  const [showRerankListModal, setShowRerankListModal] = useState(false);
+  const [rerankListData, setRerankListData] = useState<{
     jobId: string;
     results: Array<{
       patent_id: string;
       title?: string;
+      rerank_score?: number;
+      vector_score?: number;
+    }>;
+    totalCount?: number;
+  } | null>(null);
+  const [showFusionListModal, setShowFusionListModal] = useState(false);
+  const [fusionListData, setFusionListData] = useState<{
+    jobId: string;
+    results: Array<{
+      patent_id: string;
+      title?: string;
+      rerank_score?: number;
       graph_score?: number;
+      fusion_score?: number;
       vector_score?: number;
     }>;
     totalCount?: number;
@@ -157,7 +182,7 @@ const PatentInput: React.FC = () => {
   // キーワード検索結果を取得してモーダルを表示
   const handleShowPatentList = async (jobId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/keyword-search-result/${jobId}`);
+      const res = await apiFetch(`/keyword-search-result/${jobId}`);
       if (res.ok) {
         const data = await res.json();
         console.log("Keyword search result data:", data);
@@ -219,20 +244,20 @@ const PatentInput: React.FC = () => {
     setShowVectorListModal(true);
   };
 
-  const handleShowGraphList = (
+  const handleShowRerankList = (
     jobId: string,
     detail?: StageDetail,
     resultPayload?: JobResultPayload
   ) => {
-    const stageDetail = readStageDetail(detail, "graph_rag");
-    const fromStage = Array.isArray(stageDetail?.graph_patent_results)
-      ? (stageDetail?.graph_patent_results as Array<Record<string, unknown>>).map(
+    const stageDetail = readStageDetail(detail, "rerank");
+    const fromStage = Array.isArray(stageDetail?.rerank_patent_results)
+      ? (stageDetail?.rerank_patent_results as Array<Record<string, unknown>>).map(
           (item) => ({
             patent_id: String(item.patent_id ?? item.patentId ?? ""),
             title: typeof item.title === "string" ? item.title : undefined,
-            graph_score:
-              typeof item.graph_score === "number"
-                ? item.graph_score
+            rerank_score:
+              typeof item.rerank_score === "number"
+                ? item.rerank_score
                 : undefined,
             vector_score:
               typeof item.vector_score === "number"
@@ -240,14 +265,14 @@ const PatentInput: React.FC = () => {
                 : undefined,
           })
         )
-      : Array.isArray(stageDetail?.graph_top_results)
-      ? (stageDetail?.graph_top_results as Array<Record<string, unknown>>).map(
+      : Array.isArray(stageDetail?.rerank_top_results)
+      ? (stageDetail?.rerank_top_results as Array<Record<string, unknown>>).map(
           (item) => ({
             patent_id: String(item.patent_id ?? item.patentId ?? ""),
             title: typeof item.title === "string" ? item.title : undefined,
-            graph_score:
-              typeof item.graph_score === "number"
-                ? item.graph_score
+            rerank_score:
+              typeof item.rerank_score === "number"
+                ? item.rerank_score
                 : undefined,
             vector_score:
               typeof item.vector_score === "number"
@@ -265,8 +290,10 @@ const PatentInput: React.FC = () => {
               typeof (item as Record<string, unknown>).title === "string"
                 ? ((item as Record<string, unknown>).title as string)
                 : undefined,
-            graph_score:
-              typeof (item as Record<string, unknown>).graph_score === "number"
+            rerank_score:
+              typeof (item as Record<string, unknown>).rerank_score === "number"
+                ? ((item as Record<string, unknown>).rerank_score as number)
+                : typeof (item as Record<string, unknown>).graph_score === "number"
                 ? ((item as Record<string, unknown>).graph_score as number)
                 : undefined,
             vector_score:
@@ -278,19 +305,91 @@ const PatentInput: React.FC = () => {
 
     const results = fromStage ?? fromResults ?? [];
     if (results.length === 0) {
-      alert("Graph検索結果がまだありません。");
+      alert("リランキング結果がまだありません。");
       return;
     }
 
-    setGraphListData({
+    setRerankListData({
       jobId,
       results,
       totalCount:
-        typeof stageDetail?.graph_results === "number"
-          ? stageDetail.graph_results
+        typeof stageDetail?.rerank_results === "number"
+          ? stageDetail.rerank_results
           : results.length,
     });
-    setShowGraphListModal(true);
+    setShowRerankListModal(true);
+  };
+
+  const handleShowFusionList = (
+    jobId: string,
+    detail?: StageDetail,
+    resultPayload?: JobResultPayload
+  ) => {
+    const stageDetail = readStageDetail(detail, "fusion");
+    const fromStage = Array.isArray(stageDetail?.fusion_patent_results)
+      ? (stageDetail?.fusion_patent_results as Array<Record<string, unknown>>).map(
+          (item) => ({
+            patent_id: String(item.patent_id ?? item.patentId ?? ""),
+            title: typeof item.title === "string" ? item.title : undefined,
+            rerank_score:
+              typeof item.rerank_score === "number"
+                ? item.rerank_score
+                : undefined,
+            graph_score:
+              typeof item.graph_score === "number"
+                ? item.graph_score
+                : undefined,
+            fusion_score:
+              typeof item.fusion_score === "number"
+                ? item.fusion_score
+                : undefined,
+            vector_score:
+              typeof item.vector_score === "number"
+                ? item.vector_score
+                : undefined,
+          })
+        )
+      : null;
+    const fromPayload =
+      resultPayload && Array.isArray(resultPayload.fusion_results)
+        ? resultPayload.fusion_results.map((item) => ({
+            patent_id: String(item.patent_id),
+            title:
+              typeof item.title === "string"
+                ? item.title
+                : undefined,
+            rerank_score:
+              typeof item.rerank_score === "number"
+                ? item.rerank_score
+                : undefined,
+            graph_score:
+              typeof item.graph_score === "number"
+                ? item.graph_score
+                : undefined,
+            fusion_score:
+              typeof item.fusion_score === "number"
+                ? item.fusion_score
+                : undefined,
+            vector_score:
+              typeof item.vector_score === "number"
+                ? item.vector_score
+                : undefined,
+          }))
+        : null;
+    const results = fromStage ?? fromPayload ?? [];
+    if (results.length === 0) {
+      alert("Graph-RAG統合結果がまだありません。");
+      return;
+    }
+    setFusionListData({
+      jobId,
+      results,
+      totalCount:
+        typeof stageDetail?.fusion_top === "number"
+          ? stageDetail.fusion_top
+          : results.length,
+    });
+    setShowFusionListModal(true);
   };
 
   // 特許を追加（最大30件）
@@ -372,7 +471,7 @@ const PatentInput: React.FC = () => {
       const results = await Promise.all(
         jobIds.map(async (jobId) => {
           try {
-            const res = await fetch(`${API_BASE}/cancel/${jobId}`, {
+            const res = await apiFetch(`/cancel/${jobId}`, {
               method: "POST",
             });
             if (!res.ok) {
@@ -416,7 +515,7 @@ const PatentInput: React.FC = () => {
       for (const slot of textFiles) {
         const formData = new FormData();
         formData.append("file", slot.file);
-        const response = await fetch(`${API_BASE}/ingest-text`, {
+        const response = await apiFetch(`/ingest-text`, {
           method: "POST",
           body: formData,
         });
@@ -458,7 +557,7 @@ const PatentInput: React.FC = () => {
     const updates: Record<string, Partial<JobInfo>> = {};
     for (const job of jobList) {
       try {
-        const res = await fetch(`${API_BASE}/status/${job.jobId}`);
+        const res = await apiFetch(`/status/${job.jobId}`);
         if (res.status === 404) {
           updates[job.jobId] = {
             pollActive: false,
@@ -486,7 +585,7 @@ const PatentInput: React.FC = () => {
         } else if (payload.status === "failed") {
           baseUpdate.pollActive = false;
         } else if (payload.status === "completed") {
-          const resultRes = await fetch(`${API_BASE}/result/${job.jobId}`);
+          const resultRes = await apiFetch(`/result/${job.jobId}`);
           if (resultRes.status === 200) {
             const resultPayload = await resultRes.json();
             baseUpdate.resultPayload = resultPayload;
@@ -534,7 +633,7 @@ const PatentInput: React.FC = () => {
     };
     if (!job.resultPayload) {
       try {
-        const res = await fetch(`${API_BASE}/result/${job.jobId}`);
+        const res = await apiFetch(`/result/${job.jobId}`);
         if (res.status === 200) {
           const payload = await res.json();
           setJobs((prev) =>
@@ -738,8 +837,11 @@ const PatentInput: React.FC = () => {
                   onShowVectorList={() =>
                     handleShowVectorList(job.jobId, job.detail)
                   }
-                  onShowGraphList={() =>
-                    handleShowGraphList(job.jobId, job.detail, job.resultPayload)
+                  onShowRerankList={() =>
+                    handleShowRerankList(job.jobId, job.detail, job.resultPayload)
+                  }
+                  onShowFusionList={() =>
+                    handleShowFusionList(job.jobId, job.detail, job.resultPayload)
                   }
                 />
                 <div className="job-meta">
@@ -1123,11 +1225,11 @@ const PatentInput: React.FC = () => {
         </div>
       )}
 
-      {/* Graph検索結果モーダル */}
-      {showGraphListModal && graphListData && (
+      {/* リランキング結果モーダル */}
+      {showRerankListModal && rerankListData && (
         <div
           className="modal-overlay"
-          onClick={() => setShowGraphListModal(false)}
+          onClick={() => setShowRerankListModal(false)}
           style={{
             position: "fixed",
             top: 0,
@@ -1165,16 +1267,16 @@ const PatentInput: React.FC = () => {
             >
               <div>
                 <h3 style={{ margin: 0, fontSize: "18px" }}>
-                  Graph検索結果 (
-                  {(graphListData.totalCount ?? graphListData.results.length).toLocaleString()}
+                  リランキング結果 (
+                  {(rerankListData.totalCount ?? rerankListData.results.length).toLocaleString()}
                   件)
                 </h3>
                 <p style={{ margin: "4px 0", color: "#6b7280", fontSize: "12px" }}>
-                  ジョブID: {graphListData.jobId}
+                  ジョブID: {rerankListData.jobId}
                 </p>
               </div>
               <button
-                onClick={() => setShowGraphListModal(false)}
+                onClick={() => setShowRerankListModal(false)}
                 style={{
                   background: "none",
                   border: "none",
@@ -1231,7 +1333,7 @@ const PatentInput: React.FC = () => {
                         borderBottom: "1px solid #e5e7eb",
                       }}
                     >
-                      GraphScore
+                      RerankScore
                     </th>
                     <th
                       style={{
@@ -1245,7 +1347,7 @@ const PatentInput: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {graphListData.results.map((item, index) => (
+                  {rerankListData.results.map((item, index) => (
                     <tr
                       key={`${item.patent_id}-${index}`}
                       style={{ borderBottom: "1px solid #f3f4f6" }}
@@ -1255,13 +1357,136 @@ const PatentInput: React.FC = () => {
                       </td>
                       <td style={{ padding: "4px" }}>{formatPatentNumber(item.patent_id)}</td>
                       <td style={{ padding: "4px" }}>
-                        {item.graph_score !== undefined
+                        {item.rerank_score !== undefined
+                          ? item.rerank_score.toFixed(3)
+                          : item.graph_score !== undefined
                           ? item.graph_score.toFixed(3)
                           : "-"}
                       </td>
                       <td style={{ padding: "4px" }}>
                         {item.vector_score !== undefined
                           ? item.vector_score.toFixed(3)
+                          : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFusionListModal && fusionListData && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowFusionListModal(false)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="modal-content"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+            style={{
+              backgroundColor: "white",
+              borderRadius: "8px",
+              padding: "24px",
+              maxWidth: "720px",
+              width: "95%",
+              maxHeight: "85vh",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px",
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: "18px" }}>
+                Graph-RAG統合上位結果 (
+                {(fusionListData.totalCount ?? fusionListData.results.length).toLocaleString()}
+                件)
+              </h3>
+              <button
+                onClick={() => setShowFusionListModal(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "4px",
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <p style={{ marginTop: 0, marginBottom: "8px" }}>
+              ジョブID: {fusionListData.jobId}
+            </p>
+            <div
+              style={{
+                overflowY: "auto",
+                flex: 1,
+                border: "1px solid #ddd",
+                borderRadius: "6px",
+              }}
+            >
+              <table
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  fontSize: "14px",
+                }}
+              >
+                <thead>
+                  <tr style={{ backgroundColor: "#f3f4f6" }}>
+                    <th style={{ padding: "8px", textAlign: "left" }}>順位</th>
+                    <th style={{ padding: "8px", textAlign: "left" }}>特許ID</th>
+                    <th style={{ padding: "8px", textAlign: "left" }}>タイトル</th>
+                    <th style={{ padding: "8px", textAlign: "right" }}>Graph</th>
+                    <th style={{ padding: "8px", textAlign: "right" }}>Rerank</th>
+                    <th style={{ padding: "8px", textAlign: "right" }}>Fusion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fusionListData.results.map((item, index) => (
+                    <tr
+                      key={`${item.patent_id}-${index}`}
+                      style={{
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
+                      <td style={{ padding: "8px" }}>{index + 1}</td>
+                      <td style={{ padding: "8px" }}>
+                        {formatPatentNumber(item.patent_id)}
+                      </td>
+                      <td style={{ padding: "8px" }}>{item.title || "-"}</td>
+                      <td style={{ padding: "8px", textAlign: "right" }}>
+                        {typeof item.graph_score === "number"
+                          ? item.graph_score.toFixed(3)
+                          : "-"}
+                      </td>
+                      <td style={{ padding: "8px", textAlign: "right" }}>
+                        {typeof item.rerank_score === "number"
+                          ? item.rerank_score.toFixed(3)
+                          : "-"}
+                      </td>
+                      <td style={{ padding: "8px", textAlign: "right" }}>
+                        {typeof item.fusion_score === "number"
+                          ? item.fusion_score.toFixed(3)
                           : "-"}
                       </td>
                     </tr>

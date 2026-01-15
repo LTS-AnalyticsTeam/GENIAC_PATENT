@@ -8,11 +8,8 @@ import {
   WebSearchDetail,
 } from "../types";
 import "./BatchResults.css";
+import { apiFetch } from "../lib/apiClient";
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ??
-  import.meta.env.VITE_API_BASE ??
-  "http://localhost:8080";
 const RESULT_CACHE_PREFIX = "ps-result-cache";
 const buildResultCacheKey = (jobId: string) =>
   `${RESULT_CACHE_PREFIX}:${jobId}`;
@@ -23,6 +20,8 @@ type GraphResult = {
   summary?: string;
   classification_ipc?: string[];
   graph_score?: number;
+  rerank_score?: number;
+  fusion_score?: number;
   analysis_status?: string;
   analysis_error?: string;
   analysis?: AnalysisResponse;
@@ -32,6 +31,7 @@ interface PipelineResultResponse {
   job_id: string;
   completed_at: string;
   results: GraphResult[];
+  fusion_results?: GraphResult[];
   pipeline_stats: Record<string, unknown>;
   web_search_details?: WebSearchDetail[];
 }
@@ -105,7 +105,7 @@ const BatchResults: React.FC = () => {
       setLoading(true);
       setErrorMessage(null);
       try {
-        const res = await fetch(`${API_BASE}/result/${jobIdFromQuery}`);
+        const res = await apiFetch(`/result/${jobIdFromQuery}`);
         if (!res.ok) {
           const errorText = await res.text();
           throw new Error(errorText || "結果取得に失敗しました");

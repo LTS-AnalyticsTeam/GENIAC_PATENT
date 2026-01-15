@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -88,7 +89,43 @@ class AnalysisService:
         source_doc = from_patent_json_v1(alpha_json)
         claims_2_to_5 = self._extract_claims_2_to_5(alpha_json)
         alpha = self._build_alpha_info(alpha_json.get("patent_id", "alpha"), source_doc, claims_2_to_5, alpha_json.get("title"))
-        candidates_slice = list(candidates_json[:30])
+
+        def _tokenize(text: str) -> List[str]:
+            if not text:
+                return []
+            tokens = re.findall(r"[A-Za-z0-9]+|[\u3040-\u30ff\u4e00-\u9fff]+", text)
+            return [tok.lower() for tok in tokens if len(tok) > 1]
+
+        def _extract_claim1(candidate: Dict[str, Any]) -> str:
+            claim1 = candidate.get("claim1")
+            if isinstance(claim1, str) and claim1:
+                return claim1
+            claims = candidate.get("claims")
+            if isinstance(claims, list) and claims:
+                first = claims[0]
+                if isinstance(first, dict):
+                    return str(first.get("text") or first.get("claim_text") or "")
+                return str(first)
+            return ""
+
+        alpha_claim_tokens = set(_tokenize(source_doc.claim1))
+        alpha_summary = alpha_json.get("summary") or alpha_json.get("abstract") or ""
+        alpha_context_tokens = set(_tokenize(" ".join([alpha.title or "", str(alpha_summary)])))
+
+        scored_candidates: List[Tuple[int, int, Dict[str, Any]]] = []
+        for idx, candidate in enumerate(candidates_json):
+            title = candidate.get("title") or candidate.get("bibliographic", {}).get("title") or ""
+            summary = candidate.get("summary") or candidate.get("abstract") or ""
+            claim1 = _extract_claim1(candidate)
+            cand_claim_tokens = set(_tokenize(claim1))
+            cand_context_tokens = set(_tokenize(" ".join([str(title), str(summary)])))
+            claim_overlap = len(alpha_claim_tokens & cand_claim_tokens)
+            context_overlap = len(alpha_context_tokens & cand_context_tokens)
+            score = claim_overlap * 2 + context_overlap
+            scored_candidates.append((score, idx, candidate))
+
+        scored_candidates.sort(key=lambda item: (-item[0], item[1]))
+        candidates_slice = [item[2] for item in scored_candidates[:50]]
 
         # なるべく否定根拠の強いものを優先しつつ、必ず各カテゴリで1件以上返す。
         def score_assessment(assess: AssessmentCandidate, consider_inventive: bool) -> float:
@@ -133,7 +170,7 @@ class AnalysisService:
 
         claim1_pool: List[Dict[str, Any]] = []
         rest_pool: List[Dict[str, Any]] = []
-        MAX_EVALS = min(30, len(candidates_slice))  # レート制限を避けるため評価上限を設定（50k TPM想定）
+        MAX_EVALS = min(50, len(candidates_slice))  # レート制限を避けるため評価上限を設定（50k TPM想定）
 
         for idx, candidate_json in enumerate(candidates_slice[:MAX_EVALS]):
             cand_doc = from_patent_json_v1(candidate_json)
@@ -207,9 +244,10 @@ class AnalysisService:
             return selected
 
         used_ids: set[str] = set()
+        max_ax = 5
 
-        # 請求項1: 否定あり優先、なければスコア上位から1件のみ
-        claim1_selected = pick_top(claim1_pool, 1, require_denied=True, used_ids=used_ids)
+        # 請求項1: 否定あり優先（最大5件）、なければ上位1件のみ
+        claim1_selected = pick_top(claim1_pool, max_ax, require_denied=True, used_ids=used_ids)
         if not claim1_selected and claim1_pool:
             claim1_selected = pick_top(claim1_pool, 1, require_denied=False, used_ids=used_ids)
 
@@ -226,12 +264,15 @@ class AnalysisService:
             for cand_json in candidates_slice:
                 candidate = build_placeholder_candidate(cand_json, [(1, source_doc.claim1, False)])
                 if candidate and candidate.doc_id not in used_ids:
+                    used_ids.add(candidate.doc_id)
                     placeholder = candidate
                     break
             if not placeholder:
-                placeholder = build_placeholder_candidate(candidates_slice[0], [(1, source_doc.claim1, False)])
+                fallback_candidate = build_placeholder_candidate(candidates_slice[0], [(1, source_doc.claim1, False)])
+                if fallback_candidate and fallback_candidate.doc_id not in used_ids:
+                    used_ids.add(fallback_candidate.doc_id)
+                    placeholder = fallback_candidate
             if placeholder:
-                used_ids.add(placeholder.doc_id)
                 claim1_selected = [placeholder]
 
         if claims_2_to_5 and not rest_selected and candidates_slice:
@@ -438,6 +479,59 @@ class AnalysisService:
                     ipc_codes.append(text)
         return ipc_codes
 
+    @staticmethod
+    def _flatten_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            if "text" in value:
+                return str(value.get("text") or "")
+            for key in ("ja", "en", "value", "content"):
+                if key in value and value.get(key):
+                    return str(value.get(key))
+            return ""
+        if isinstance(value, list):
+            parts = [AnalysisService._flatten_text(item) for item in value]
+            return " ".join(part for part in parts if part)
+        return str(value)
+
+    @staticmethod
+    def _extract_description_section(description: Any, key: str) -> str:
+        if isinstance(description, dict):
+            raw = description.get(key) or description.get(key.replace("_", "-"))
+        else:
+            raw = None
+        return AnalysisService._flatten_text(raw).strip()
+
+    @staticmethod
+    def _split_claim_elements(text: str, limit: int = 12) -> List[str]:
+        if not text:
+            return []
+        cleaned = re.sub(r"\s+", " ", str(text)).strip()
+        if not cleaned:
+            return []
+        chunks = re.split(r"[。;；]\s*", cleaned)
+        elements: List[str] = []
+        for chunk in chunks:
+            if not chunk:
+                continue
+            if "、" in chunk:
+                elements.extend([part.strip() for part in chunk.split("、") if part.strip()])
+            else:
+                elements.append(chunk.strip())
+        seen: set[str] = set()
+        ordered: List[str] = []
+        for elem in elements:
+            if elem in seen:
+                continue
+            seen.add(elem)
+            ordered.append(elem)
+            if len(ordered) >= limit:
+                break
+        return ordered
+
     async def _llm_assess_candidate(
         self,
         *,
@@ -460,12 +554,14 @@ class AnalysisService:
                     "入力として与えられる特許α（対象特許）と候補先行技術を比較し、新規性・進歩性を否定できる根拠を最大限抽出し、JSONで返してください。"
                     "必ず指定フォーマットに従い、引用箇所は短く抜粋してください。"
                     "各エビデンスは『α請求項の該当部分（5〜30文字程度の短い片）』と『候補特許の該当部分（同程度の短い片）』のペアで必ず示してください。"
+                    "【評価の軸】α請求項1の要素分解リストを最優先で参照し、候補が全要素を満たすかを判定する。"
                     "【デフォルト姿勢】否定根拠を優先して探索するが、以下の条件で supported / uncertain も柔軟に用いてよい。"
                     " supported: αの必須構成に対し候補に明確な欠落・矛盾・非同等の差異があるとき。"
                     " uncertain: 記載不足や曖昧表現で一致/不一致が判断できないとき（差異が小さい場合は denied も検討するが、無理に否定しない）。"
                     "【判定基準】"
                     " 新規性: αの必須構成が候補に明示または実質同等なら denied。α要件が明確に欠落する場合のみ supported。情報不足は uncertain。"
                     " 進歩性: 候補単独＋公知技術で容易想到なら denied。非自明な差異を具体的に示せる場合のみ supported。不足は uncertain。"
+                    "【必須要件】denied を出す場合は、αの要素ごとに候補側の対応記載があることを確認し、examiner_hints に対応/欠落の要約を書く。"
                     "【エビデンス記載】各請求項ごとに必ず1ペア以上の証拠を返す。denied時は否定根拠を必ず含める。supportedの場合は『なぜ否定できないか』をwhyに明示。"
                     "whyには技術的理由を簡潔に記述し、不要な前置きは省く。"
                 ),
@@ -538,7 +634,14 @@ class AnalysisService:
         target_claims: Sequence[Tuple[int, str, bool]],
     ) -> str:
         summary = candidate_json.get("summary") or candidate_json.get("abstract") or ""
-        claim1 = ((candidate_json.get("claim1") or candidate_json.get("claims", [{}])[0].get("text", "")) if candidate_json.get("claims") else candidate_json.get("claim1", ""))
+        claim1 = (
+            (candidate_json.get("claim1") or candidate_json.get("claims", [{}])[0].get("text", ""))
+            if candidate_json.get("claims")
+            else candidate_json.get("claim1", "")
+        )
+        candidate_description = candidate_json.get("description")
+        technical_field = self._extract_description_section(candidate_description, "technical-field")
+        alpha_elements = self._split_claim_elements(alpha.claim1)
         claims_texts: List[str] = []
         claims = candidate_json.get("claims") or []
         for cl in claims[:5]:
@@ -561,11 +664,14 @@ class AnalysisService:
             "【対象特許（α）】",
             f"タイトル: {alpha.title}",
             f"請求項1: {alpha.claim1}",
+            "請求項1の必須構成（要素分解）:",
+            "\n".join([f"  - {elem}" for elem in alpha_elements]) if alpha_elements else "  - （要素抽出なし）",
             f"請求項2以降: {' / '.join(alpha.claims_rest) if alpha.claims_rest else 'なし'}",
             "",
             "【比較候補】",
             f"タイトル: {candidate_json.get('title') or candidate_json.get('bibliographic', {}).get('title') or '不明'}",
             f"公報番号: {candidate_json.get('patent_id') or candidate_json.get('id') or candidate_json.get('pub_number') or '不明'}",
+            f"技術分野: {technical_field or '不明'}",
             f"要約: {summary}",
             f"請求項1(候補): {claim1}",
             f"主要な請求項抜粋: {' / '.join(claims_texts[:3]) if claims_texts else 'なし'}",
@@ -584,6 +690,12 @@ class AnalysisService:
             "",
             "【判定対象の請求項（α）】",
             "\n".join(target_claim_lines),
+            "",
+            "【判定の手順】",
+            "1) αの要素分解リストを参照し、候補に各要素の対応記載があるか確認する。",
+            "2) 全要素が候補に記載されていれば新規性は denied。",
+            "3) 1つでも欠落・非同等があれば supported、判断不能は uncertain。",
+            "4) examiner_hints に対応要素/欠落要素の要約を書く。",
             "",
         ])
 

@@ -55,6 +55,13 @@ class PipelineConfig:
     vectorizer_url: str = field(default_factory=lambda: os.getenv("VECTORIZER_URL", "http://localhost:9000"))
     allow_vectorizer_fallback: bool = field(default_factory=lambda: _get_env_bool("ALLOW_VECTORIZER_FALLBACK", True))
 
+    cohere_api_key: str = field(default_factory=lambda: os.getenv("COHERE_API_KEY", ""))
+    cohere_rerank_model: str = field(default_factory=lambda: os.getenv("COHERE_RERANK_MODEL", "rerank-v4.0-pro"))
+
     def ensure_embedding_credentials(self) -> None:
         if not self.azure_openai_key or not self.azure_openai_endpoint:
             raise RuntimeError("Azure OpenAI credentials are required. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY.")
+
+    def ensure_rerank_credentials(self) -> None:
+        if not self.cohere_api_key:
+            raise RuntimeError("Cohere API key is required. Set COHERE_API_KEY for reranking.")

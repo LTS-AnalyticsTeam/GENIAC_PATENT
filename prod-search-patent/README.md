@@ -1,6 +1,6 @@
 # prod-search-patent
 
-End-to-end patent search pipeline designed for production parity with the Graph-RAG architecture.  
+End-to-end patent search pipeline combining dense retrieval with Cohere reranking for production workloads.  
 The stack is fully containerised with Docker Compose and covers the following services:
 
 - **api** – FastAPI ingestion/search service with job orchestration
@@ -8,7 +8,7 @@ The stack is fully containerised with Docker Compose and covers the following se
 - **worker** – Background pipeline executor (Redis-backed)
 - **redis** – Message broker for ingestion jobs
 - **elasticsearch** – Primary vector store for Stage 1 index
-- **neo4j** – Graph store (APOC enabled) powering Stage 2 graph enrichment & Graph-RAG
+- **neo4j** – (legacy) Graph store previously used for Graph-RAG experimentation
 - **cosmos-proxy** – Optional façade over Azure Cosmos DB (stub implementation)
 - **vectorizer** – Local HTTP embedding/summary service (stub; Azure OpenAI compatible schema)
 
@@ -20,7 +20,7 @@ The stack is fully containerised with Docker Compose and covers the following se
 4. **Query generation** – Generate hybrid vector/text queries (LLM powered, optional override).
 5. **Vector search** – Run Stage 1 `knn` search (`k=1000`, `num_candidates` from env).
 6. **Stage 2 ingest** – Reset and enrich Neo4j graph.
-7. **Graph-RAG** – Combine Neo4j paths and return Top 10.
+7. **Cohere rerank** – Compare α-patent text with vector hits and keep Top 30.
 8. **Result delivery** – `/result/{job_id}` API responds with scored Top 10 + evidence.
 
 ## Repository layout
@@ -81,6 +81,11 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Set the following secrets in your environment (or `.env`) before running:
+
+- `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` – for embeddings.
+- `COHERE_API_KEY` – for reranking (`rerank-v4.0-pro` by default, requires the latest Cohere SDK: `pip install -U cohere`).
+
 アクセス:
 - Frontend: <http://localhost:3000>
 - API: <http://localhost:8080>
@@ -98,7 +103,7 @@ docker compose up --build
 
 - テキストファイル（.txt 内に XML を格納）をアップロードして `/ingest` を呼び出す
 - `/status/{job_id}` を 3 秒おきにポーリングし、ステージ単位の進捗を表示
-- ジョブ完了後、自動的に `/result/{job_id}` から Graph-RAG Top10 を取得し、カード表示
+- ジョブ完了後、自動的に `/result/{job_id}` からリランキング済み候補を取得し、カード表示
 
 ## Tests
 
